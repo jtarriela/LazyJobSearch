@@ -263,7 +263,8 @@ repo/
 ## 6) Scraper Design Details
 
 * **Per‑site adapter** interface: `search(query_terms) -> list[JobPosting]` with pagination & rate caps.
-* **Anti‑bot hygiene**: rotate user‑agents, backoff on 429, respect robots.txt, randomized think time, no parallel clicks on same host.
+* **Anti‑bot posture (ADR 0008)**: rotating residential proxies (provider interface), fingerprint randomization (UA, viewport, timezone, lang, minor canvas noise), Human Behavior Simulator (Bezier mouse paths, scroll bursts + dwell jitter), adaptive backoff state machine (normal → slow → cooldown) on status/challenge patterns, optional captcha solving behind a feature flag, session capture in `scrape_sessions`.
+* **Ethical guardrails**: robots.txt respect, per-domain page cap, emergency disable flag.
 * **Idempotency**: `url` unique; UPSERT (`ON CONFLICT (url) DO UPDATE`); `scrape_fingerprint` for diffing.
 * **Error handling**: screenshot + HTML snapshot on failure; structured error rows.
 * **Config**: YAML per company (selectors, search fields, pagination buttons, filters).
@@ -275,6 +276,9 @@ repo/
 1. **Keyword prefilter**: `jobs.jd_tsv @@ websearch_to_tsquery(:q)` where `:q` is synthesized from resume top skills.
 2. **Vector prefilter**: cosine similarity on `job_chunks.embedding` vs aggregated resume embedding (mean or max‑pool over top resume chunks).
 3. **LLM scorer**: prompt with top‑N overlapping chunks (both sides), ask for JSON result with score/reasons/gaps and recommendation.
+
+### 7.1 Adaptive Feedback Extension (ADR 0007)
+After ≥500 labeled outcomes (e.g., interview indicators), shift from static heuristic to learned weights over features (`vector_score`, `llm_score`, normalized `fts_rank`, `yoe_gap`, `skill_overlap`, `recency_factor`). Weights live in `matching_feature_weights` and can be rolled back if AUC degradation detected. False negative analysis surfaces low-scored yet successful matches.
 
 **Thresholds**
 
@@ -308,6 +312,63 @@ CREATE INDEX resume_chunks_embed_ivfflat ON resume_chunks USING ivfflat (embeddi
 CREATE UNIQUE INDEX jobs_url_uidx ON jobs(url);
 ```
 
+### 8.1 Embedding Versioning (ADR 0006)
+Planned schema additions for progressive migration:
+```sql
+ALTER TABLE job_chunks ADD COLUMN embedding_version text;
+ALTER TABLE job_chunks ADD COLUMN embedding_model text;
+ALTER TABLE job_chunks ADD COLUMN needs_reembedding boolean DEFAULT false;
+ALTER TABLE resume_chunks ADD COLUMN embedding_version text;
+ALTER TABLE resume_chunks ADD COLUMN embedding_model text;
+ALTER TABLE resume_chunks ADD COLUMN needs_reembedding boolean DEFAULT false;
+
+CREATE TABLE embedding_versions (
+  version_id text primary key,
+  model_name text NOT NULL,
+  dimensions int NOT NULL,
+  created_at timestamptz DEFAULT now(),
+  deprecated_at timestamptz,
+  compatible_with text[]
+);
+CREATE INDEX idx_reembed_job_chunks ON job_chunks(needs_reembedding) WHERE needs_reembedding = true;
+CREATE INDEX idx_reembed_resume_chunks ON resume_chunks(needs_reembedding) WHERE needs_reembedding = true;
+```
+
+### 8.2 Feedback Outcome Tables (ADR 0007)
+```sql
+CREATE TABLE match_outcomes (
+  id uuid primary key,
+  match_id uuid NOT NULL REFERENCES matches(id),
+  got_response boolean,
+  response_time_hours int,
+  got_interview boolean,
+  got_offer boolean,
+  user_satisfaction int,
+  captured_at timestamptz DEFAULT now()
+);
+
+CREATE TABLE matching_feature_weights (
+  id uuid primary key,
+  created_at timestamptz DEFAULT now(),
+  model_version text,
+  weights_json jsonb NOT NULL
+);
+```
+
+### 8.3 Scrape Sessions (ADR 0008)
+```sql
+CREATE TABLE scrape_sessions (
+  id uuid primary key,
+  company_id uuid,
+  started_at timestamptz DEFAULT now(),
+  finished_at timestamptz,
+  profile_json jsonb,
+  proxy_identifier text,
+  outcome text,
+  metrics_json jsonb
+);
+```
+
 ---
 
 ## 9) Security, Privacy, Compliance
@@ -333,7 +394,8 @@ CREATE UNIQUE INDEX jobs_url_uidx ON jobs(url);
 * Batch embeddings; cache identical chunks.
 * Use smaller embedding model where acceptable.
 * LLM only on vector‑passed jobs; cap daily evals.
-* Re‑embed JD only on fingerprint change.
+* Re‑embed JD only on fingerprint change; track backlog metrics (ADR 0006).
+* Resume adaptive model retraining only if marginal gain > threshold.
 
 ---
 
@@ -370,7 +432,7 @@ CREATE UNIQUE INDEX jobs_url_uidx ON jobs(url);
 ### Phase 2 (Weeks 3–5)
 
 * Robust adapter framework & config registry
-* Playwright fallback; anti‑bot improvements
+* Playwright fallback; anti‑bot posture v1 (fingerprint + proxies + behavior sim) (ADR 0008)
 * Admin dashboard (list jobs, matches, errors)
 * Cover letter generator
 * Change detection + partial reprocessing
@@ -379,7 +441,8 @@ CREATE UNIQUE INDEX jobs_url_uidx ON jobs(url);
 
 * Social/warm‑intro module
 * Multi‑resume A/B matching
-* Advanced ranking with learned weights (logistic regression over features: FTS rank, cosine, Jaccard of skills, YOE gap)
+* Adaptive ranking (logistic regression weights) (ADR 0007)
+* Embedding version migration & evaluation harness (ADR 0006)
 * Optional OpenSearch integration
 
 ---
@@ -391,6 +454,8 @@ CREATE UNIQUE INDEX jobs_url_uidx ON jobs(url);
 * Resume PII redaction at chunk boundary
 * Company rate limit defaults; global politeness policy
 * Error budget for LLM/API failures (fallback scores?)
+* Threshold for activating adaptive model (min labeled outcomes?)
+* Proxy pool sizing vs. block rate tradeoff
 
 ---
 

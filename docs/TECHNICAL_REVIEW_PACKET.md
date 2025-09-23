@@ -189,6 +189,14 @@ Three-tier pipeline (FTS → vector → LLM) reduces LLM token spend by pruning 
 **Mitigation**: Avoid provider-specific prompt tokens (e.g., extended system roles).
 
 ### ADR 5 – Limited Auto‑Apply Scope (Greenhouse + Lever)
+### ADR 6 – Embedding Versioning & Migration (0006)
+Ensures backward compatibility & progressive re‑embedding with evaluation gating & backlog metrics.
+
+### ADR 7 – Adaptive Matching Feedback Loop (0007)
+Closed-loop learning: logistic regression over match feature vector with rollback on AUC regression.
+
+### ADR 8 – Production Anti‑Bot Posture (0008)
+Layered proxies, fingerprint randomization, human behavior simulation, adaptive backoff, optional captcha solver, ethical guardrails.
 **Decision**: Deliver reliable automation for two major portals first; define portal template DSL for scalable expansion.  
 **Consequence**: Early user value with controlled complexity; reduces initial risk from Workday/Taleo variance.
 
@@ -230,8 +238,11 @@ Three-tier pipeline (FTS → vector → LLM) reduces LLM token spend by pruning 
 | Domain | Metric | Purpose |
 |--------|--------|---------|
 | Crawl | success_rate, duplicated_urls, pages_per_min | Health + politeness tuning |
+| Crawl (Anti-bot) | challenge_rate, captcha_rate, block_rate | Detection pressure signals |
 | Embedding | latency_ms, batch_size, cached_hits | Cost + performance insight |
+| Embedding Migration | reembed_backlog, active_version, reembed_rate | Track migration progress |
 | Matching | fts_pruned_count, vector_pruned_count, lmm_calls | Efficiency tracking |
+| Matching Adaptive | model_version, training_samples, training_auc | Feedback loop quality |
 | Review Loop | avg_iterations, score_delta, rewrite_failures | UX & cost optimization |
 | Apply | apply_success_rate, receipt_latency, portal_error_rate | Reliability for automation |
 | Cost | tokens_review, tokens_rewrite, cost_per_job | Budget guardrails |
@@ -313,7 +324,9 @@ Three-tier pipeline (FTS → vector → LLM) reduces LLM token spend by pruning 
 | Risk | Likelihood | Impact | Mitigation |
 |------|------------|--------|------------|
 | Portal DOM change | High | Medium | Template DSL, snapshots, fast patch release, feature flags |
-| Rate limiting / Captcha | Medium | Medium | Adaptive QPS, pause & notify, manual fallback |
+| Rate limiting / Captcha | High | Medium | Anti-bot posture (ADR 0008), adaptive backoff, captcha solver flag |
+| Embedding model deprecation | Medium | High | Version tracking & progressive migration (ADR 0006) |
+| Feedback model drift | Medium | Medium | A/B + AUC monitoring, rollback weights (ADR 0007) |
 | LLM cost overruns | Medium | Medium | Threshold tuning, iteration cap, switch model, budget alerts |
 | PII mishandling | Low | High | Encryption, consent gating, redaction, audit logging |
 | pgvector perf degradation | Low | Medium | IVF tuning, ANALYZE, partition plan, external engine fallback |
