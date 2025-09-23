@@ -40,6 +40,9 @@ class JobChunk(Base):
     chunk_text = Column(Text)
     # embedding vector omitted placeholder
     token_count = Column(Integer)
+    embedding_version = Column(Text)
+    embedding_model = Column(Text)
+    needs_reembedding = Column(Boolean, default=False, nullable=False)
 
 class Resume(Base):
     __tablename__ = "resumes"
@@ -59,6 +62,9 @@ class ResumeChunk(Base):
     resume_id = Column(UUID(as_uuid=True), nullable=False)
     chunk_text = Column(Text)
     token_count = Column(Integer)
+    embedding_version = Column(Text)
+    embedding_model = Column(Text)
+    needs_reembedding = Column(Boolean, default=False, nullable=False)
 
 class Match(Base):
     __tablename__ = "matches"
@@ -72,6 +78,17 @@ class Match(Base):
     llm_model = Column(Text)
     prompt_hash = Column(Text)
     scored_at = Column(DateTime)
+
+class MatchOutcome(Base):
+    __tablename__ = "match_outcomes"
+    id = uuid_pk()
+    match_id = Column(UUID(as_uuid=True), nullable=False)
+    got_response = Column(Boolean)
+    response_time_hours = Column(Integer)
+    got_interview = Column(Boolean)
+    got_offer = Column(Boolean)
+    user_satisfaction = Column(Integer)
+    captured_at = Column(DateTime)
 
 class Review(Base):
     __tablename__ = "reviews"
@@ -156,3 +173,31 @@ class Company(Base):
     website = Column(Text)
     careers_url = Column(Text)
     crawler_profile_json = Column(Text)
+
+class EmbeddingVersion(Base):
+    __tablename__ = "embedding_versions"
+    version_id = Column(Text, primary_key=True)
+    model_name = Column(Text, nullable=False)
+    dimensions = Column(Integer, nullable=False)
+    created_at = Column(DateTime)
+    deprecated_at = Column(DateTime)
+    # store array as JSON text if ARRAY not configured yet
+    compatible_with = Column(Text)  # comma-separated list for simplicity
+
+class MatchingFeatureWeights(Base):
+    __tablename__ = "matching_feature_weights"
+    id = uuid_pk()
+    created_at = Column(DateTime)
+    model_version = Column(Text)
+    weights_json = Column(Text)  # JSON serialized
+
+class ScrapeSession(Base):
+    __tablename__ = "scrape_sessions"
+    id = uuid_pk()
+    company_id = Column(UUID(as_uuid=True))
+    started_at = Column(DateTime)
+    finished_at = Column(DateTime)
+    profile_json = Column(Text)
+    proxy_identifier = Column(Text)
+    outcome = Column(Text)
+    metrics_json = Column(Text)
