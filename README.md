@@ -13,6 +13,19 @@ LazyJobSearch ingests resumes, crawls & embeds job descriptions, prefilters with
 5. Generate matches
 6. (Optional) Auto‑apply selected matches
 
+## CLI (Interim Interaction Model)
+While the web frontend is in design, a terminal CLI enables full workflow automation. See `docs/CLI_DESIGN.md`.
+
+Example (stubbed today):
+```
+python -m cli.ljs config init
+python -m cli.ljs resume ingest ./resumes/my_resume.pdf
+python -m cli.ljs match run --resume latest --limit 50
+python -m cli.ljs review start <job_id>
+python -m cli.ljs apply run <job_id> --dry-run
+```
+Add `--json` for machine-readable output. Configuration precedence: defaults < `~/.lazyjobsearch/config.yaml` < `./lazyjobsearch.yaml` < env vars `LJS_*` < flags.
+
 ## Documentation
 See `docs/ARCHITECTURE.md` for:
 * High-level & apply-extended architecture diagrams

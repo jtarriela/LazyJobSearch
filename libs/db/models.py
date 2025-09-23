@@ -148,3 +148,11 @@ class PortalFieldDictionary(Base):
     canonical_name = Column(Text)
     field_type = Column(Text)
     description = Column(Text)
+
+class Company(Base):
+    __tablename__ = "companies"
+    id = uuid_pk()
+    name = Column(Text)
+    website = Column(Text)
+    careers_url = Column(Text)
+    crawler_profile_json = Column(Text)

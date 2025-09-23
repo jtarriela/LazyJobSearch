@@ -1,0 +1,48 @@
+# Example user-level configuration for LazyJobSearch CLI
+# Copy to ~/.lazyjobsearch/config.yaml or pass --config path.
+
+user:
+  email: user@example.com
+  full_name: Example User
+  # optional tags to prioritize certain job features (locations, tech stack keywords)
+  preferences:
+    locations: ["Remote", "New York", "SF Bay Area"]
+    include_keywords: ["python", "llm", "retrieval", "postgres"]
+    exclude_keywords: ["unpaid", "internship"]
+  iteration:
+    max_iterations_per_job: 3
+    auto_request_next_if_score_improves_pct: 15  # optional automation
+
+application_profiles:
+  - name: default
+    answers:
+      work_auth_status: "US Citizen"
+      relocation: "Yes"
+      salary_expectation: "Open to market range"
+    files:
+      resume: ./resumes/current.pdf
+      cover_letter: ./resumes/cover_letter.md
+    default: true
+
+crawl:
+  companies_seed_file: ./seeds/companies.txt
+  per_domain_rate_limit_ppm: 5   # pages per minute
+  user_agent_rotation: true
+
+matching:
+  fts_query_expansion: simple
+  vector_top_k: 50
+  llm_top_k: 12
+  llm_model: gpt-4o-mini
+
+apply:
+  enabled_portals: ["greenhouse", "lever"]
+  dry_run: true   # set false to actually submit
+  evidence_capture: true  # store DOM snapshot & receipt
+
+logging:
+  level: INFO
+  json: true
+  file: ./logs/lazyjobsearch.log
+
+# End of file

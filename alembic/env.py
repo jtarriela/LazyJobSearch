@@ -15,11 +15,14 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Placeholder for metadata import
-# from app.db.models import Base  # noqa
-# target_metadata = Base.metadata
-
-target_metadata = None
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).resolve().parents[1]))  # add repo root
+try:
+    from libs.db.models import Base  # type: ignore
+    target_metadata = Base.metadata
+except Exception:  # pragma: no cover - fallback if models incomplete
+    target_metadata = None
 
 def run_migrations_offline():
     url = config.get_main_option("sqlalchemy.url", os.getenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/lazyjobsearch"))

@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=67", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lazyjobsearch"
+version = "0.1.0"
+description = "CLI and services for LazyJobSearch (resume matching & auto-apply)"
+authors = [{name="LazyJobSearch Team"}]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "SQLAlchemy>=2.0",
+  "psycopg2-binary>=2.9",
+  "PyYAML>=6.0",
+  "rich>=13.7",
+  "typer[all]>=0.12.3",
+  "jsonschema>=4.22",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2",
+  "pytest-cov>=5.0",
+]
+
+[project.scripts]
+ljs = "cli.ljs:main"
+
+[tool.pytest.ini_options]
+addopts = "-q"
+python_files = "test_*.py"
+

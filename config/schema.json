@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lazyjobsearch/config.schema.json",
+  "title": "LazyJobSearch Config",
+  "type": "object",
+  "properties": {
+    "user": {
+      "type": "object",
+      "properties": {
+        "email": {"type": "string", "format": "email"},
+        "full_name": {"type": "string"},
+        "preferences": {
+          "type": "object",
+          "properties": {
+            "locations": {"type": "array", "items": {"type": "string"}},
+            "include_keywords": {"type": "array", "items": {"type": "string"}},
+            "exclude_keywords": {"type": "array", "items": {"type": "string"}}
+          },
+          "additionalProperties": false
+        },
+        "iteration": {
+          "type": "object",
+          "properties": {
+            "max_iterations_per_job": {"type": "integer", "minimum": 1},
+            "auto_request_next_if_score_improves_pct": {"type": "integer", "minimum": 1, "maximum": 100}
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": ["email"],
+      "additionalProperties": false
+    },
+    "application_profiles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string"},
+            "answers": {"type": "object"},
+            "files": {"type": "object"},
+            "default": {"type": "boolean"}
+        },
+        "required": ["name"],
+        "additionalProperties": true
+      }
+    },
+    "crawl": {
+      "type": "object",
+      "properties": {
+        "companies_seed_file": {"type": "string"},
+        "per_domain_rate_limit_ppm": {"type": "integer", "minimum": 1},
+        "user_agent_rotation": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "matching": {
+      "type": "object",
+      "properties": {
+        "fts_query_expansion": {"type": "string"},
+        "vector_top_k": {"type": "integer", "minimum": 1},
+        "llm_top_k": {"type": "integer", "minimum": 1},
+        "llm_model": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "apply": {
+      "type": "object",
+      "properties": {
+        "enabled_portals": {"type": "array", "items": {"type": "string"}},
+        "dry_run": {"type": "boolean"},
+        "evidence_capture": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "logging": {
+      "type": "object",
+      "properties": {
+        "level": {"type": "string"},
+        "json": {"type": "boolean"},
+        "file": {"type": "string"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": true
+}
