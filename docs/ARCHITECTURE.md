@@ -222,8 +222,8 @@ repo/
 * **Queue**: Celery (Redis/Rabbit) or Dramatiq.
 * **DB**: Postgres 16 + pgvector 0.7+, SQLAlchemy 2.x + Alembic.
 * **Parsing**: pdfminer.six / pypdf / textract / docx2python.
-* **Embedding**: OpenAI text-embedding-3-large (or local alternative later).
-* **LLM**: GPT‑4.1/4o‑mini for scoring; pluggable provider.
+* **Embedding**: OpenAI text-embedding-3-large (primary) – abstraction allows future alternative (ADR 0006 evaluation harness governs swap).
+* **LLM Providers (ADR 0009)**: OpenAI (primary), Anthropic Claude, Google Gemini via unified registry (latency/cost/failover policy).
 
 ---
 
@@ -443,6 +443,7 @@ CREATE TABLE scrape_sessions (
 * Multi‑resume A/B matching
 * Adaptive ranking (logistic regression weights) (ADR 0007)
 * Embedding version migration & evaluation harness (ADR 0006)
+* Multi-provider LLM expansion (Gemini + Claude) (ADR 0009)
 * Optional OpenSearch integration
 
 ---

@@ -197,6 +197,8 @@ Closed-loop learning: logistic regression over match feature vector with rollbac
 
 ### ADR 8 – Production Anti‑Bot Posture (0008)
 Layered proxies, fingerprint randomization, human behavior simulation, adaptive backoff, optional captcha solver, ethical guardrails.
+### ADR 9 – Multi LLM Provider Expansion (0009)
+Provider registry adds Gemini & Claude for resilience, cost optimization, and quality benchmarking (failover + nightly evaluation harness).
 **Decision**: Deliver reliable automation for two major portals first; define portal template DSL for scalable expansion.  
 **Consequence**: Early user value with controlled complexity; reduces initial risk from Workday/Taleo variance.
 
@@ -243,6 +245,7 @@ Layered proxies, fingerprint randomization, human behavior simulation, adaptive 
 | Embedding Migration | reembed_backlog, active_version, reembed_rate | Track migration progress |
 | Matching | fts_pruned_count, vector_pruned_count, lmm_calls | Efficiency tracking |
 | Matching Adaptive | model_version, training_samples, training_auc | Feedback loop quality |
+| LLM Providers | provider_usage, failover_events, parse_fail_rate | Multi-provider health |
 | Review Loop | avg_iterations, score_delta, rewrite_failures | UX & cost optimization |
 | Apply | apply_success_rate, receipt_latency, portal_error_rate | Reliability for automation |
 | Cost | tokens_review, tokens_rewrite, cost_per_job | Budget guardrails |
@@ -327,6 +330,7 @@ Layered proxies, fingerprint randomization, human behavior simulation, adaptive 
 | Rate limiting / Captcha | High | Medium | Anti-bot posture (ADR 0008), adaptive backoff, captcha solver flag |
 | Embedding model deprecation | Medium | High | Version tracking & progressive migration (ADR 0006) |
 | Feedback model drift | Medium | Medium | A/B + AUC monitoring, rollback weights (ADR 0007) |
+| Provider outage / lock-in | Medium | High | Multi-provider failover & benchmarking (ADR 0009) |
 | LLM cost overruns | Medium | Medium | Threshold tuning, iteration cap, switch model, budget alerts |
 | PII mishandling | Low | High | Encryption, consent gating, redaction, audit logging |
 | pgvector perf degradation | Low | Medium | IVF tuning, ANALYZE, partition plan, external engine fallback |

@@ -14,6 +14,7 @@ This directory contains architecturally significant decisions for LazyJobSearch.
 | 0006 | Embedding Versioning & Migration Strategy | Accepted | 2025-09-23 | Track versions & progressive re-embedding. |
 | 0007 | Adaptive Matching Feedback Loop & Learned Weights | Accepted | 2025-09-23 | Closed-loop ranking via outcomes. |
 | 0008 | Production-Grade Anti-Bot & Humanization Posture | Accepted | 2025-09-23 | Layered proxies, fingerprint & behavior sim. |
+| 0009 | Multi LLM Provider Expansion | Accepted | 2025-09-23 | Add Gemini & Claude under unified provider registry. |
 
 ## Workflow
 1. Draft new ADR using template.

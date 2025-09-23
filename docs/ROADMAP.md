@@ -32,6 +32,7 @@ P2 = Nice-to-have / differentiators
 |----------|------|------------------|
 | P0 | Adaptive Ranking Activation (ADR 0007) | Logistic regression training job, weight rollout & rollback gates |
 | P0 | Embedding Migration Execution (ADR 0006) | Progressive re-embed, evaluation harness (precision/recall) |
+| P0 | Multi-Provider LLM Expansion (ADR 0009) | Provider registry, failover policy, eval harness |
 | P1 | Advanced Anti-Bot v2 | Captcha solver flag, session outcome heuristics, session pool auto-tune |
 | P1 | Multi-Resume Strategy | A/B resume variant scoring & selection |
 | P2 | Social / Warm Intro Module | Contact graph ingestion, intro recommendation |
@@ -67,6 +68,7 @@ P2 = Nice-to-have / differentiators
 * ADR 0006 – Embedding Versioning & Migration
 * ADR 0007 – Adaptive Matching Feedback Loop
 * ADR 0008 – Production Anti-Bot & Humanization Posture
+* ADR 0009 – Multi LLM Provider Expansion
 * Technical Review Packet sections 4, 6, 9
 
 ---
