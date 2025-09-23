@@ -747,3 +747,205 @@ During the loop, only the latest accepted resume version (accepted_new_resume_id
 ---
 
 This section formalizes the iterative improvement feature. Earlier content implied only a single optional revision; now the design explicitly supports repeated feedback loops until the user is satisfied or a configured cap is reached.
+
+---
+
+## 20) Frontend Architecture & Integration Plan (Next.js + Tailwind + shadcn/ui)
+
+### 20.1 Rationale & Tech Stack
+Choosing **Next.js (App Router) + Tailwind CSS + shadcn/ui (Radix primitives)** gives: rapid assembly of accessible components, server actions (optional), and strong SSR/ISR for SEO (future public pages) while keeping the core app mostly authenticated. The stack sweet spot:
+* Rich data grids (TanStack Table) + virtualization for large match/app lists.
+* Accessible dialogs/sheets/toasts; theming via `next-themes`.
+* Component ecosystem for diff viewers, Mermaid rendering (e.g., `@mermaid-js/mermaid-mindmap` or dynamic import), charts (e.g., `recharts` or `visx`).
+* Zod + tRPC-like ergonomics (though we will keep backend REST) with thin fetch wrappers.
+
+### 20.2 High-Level Frontend → Backend Interaction Flow
+```mermaid
+sequenceDiagram
+  participant UI as Next.js (SSR/CSR)
+  participant AUTH as Auth Layer (NextAuth)
+  participant API as FastAPI (/v1)
+  participant WS as FastAPI WS
+  participant S3 as Object Store
+  participant DB as Postgres
+
+  UI->>AUTH: Sign in (credentials / OAuth future)
+  AUTH->>API: Exchange for session/JWT (HTTP-only cookie)
+  UI->>API: GET /v1/matches?resume_id=... (React Query)
+  API->>DB: Query matches
+  DB-->>API: rows
+  API-->>UI: JSON
+  UI->>WS: Subscribe crawl/apply channels
+  WS-->>UI: progress events (crawl_status, apply_status)
+  UI->>API: POST /v1/reviews/{job}/start (begin AI review)
+  API->>DB: Insert review row
+  WS-->>UI: review_progress / review_complete
+  UI->>API: POST /v1/uploads/presign (resume PDF)
+  API->>S3: Create presigned PUT
+  S3-->>API: URL
+  API-->>UI: {upload_url, file_url}
+  UI->>S3: PUT file
+  UI->>API: POST /v1/resumes/ingest {file_url}
+```
+
+### 20.3 Directory Structure (Monorepo Co-located)
+```
+repo/
+  frontend/
+    app/
+      layout.tsx
+      page.tsx (dashboard redirect)
+      matches/
+        page.tsx
+      applications/
+        page.tsx
+      resumes/
+        page.tsx
+        [resumeId]/diff/[otherId]/page.tsx
+      crawl-monitor/
+        page.tsx
+      settings/
+        application-profiles/page.tsx
+        account/page.tsx
+    components/
+      ui/ (shadcn generated)
+      data-grid/
+      charts/
+      forms/
+      diff/
+      resume/
+    lib/
+      api-client.ts
+      auth.ts
+      ws.ts
+      zod-schemas/
+    styles/
+      globals.css
+    hooks/
+      useReviewLoop.ts
+    package.json
+    tailwind.config.js
+```
+
+### 20.4 Key Pages & UX Patterns
+1. Matches
+   * Data grid: columns (Job Title, Company, Vector Score bar, LLM Score bar, Action buttons: Review, Apply).
+   * Row expansion: top reasons, gaps, last updated.
+   * Multi-select bulk actions (Start Review, Mark Ignore).
+2. Applications
+   * Group by Company (accordion), list statuses, receipt link, artifacts count.
+   * Modal: “Prep Packet” summarizing strengths/weaknesses + potential interview Qs.
+3. Resume Versions
+   * Vertical timeline (Radix ScrollArea + custom markers) showing v1→v2…vN with iteration label.
+   * Diff viewer (side-by-side; highlight insertions/deletions using a library like `diff2html` or `react-diff-view` fed by backend diff endpoint or a client-side diff lib).
+   * Actions: Set Active, Start Review Loop, Download PDF.
+4. Crawl Monitor
+   * Live table streaming: site, queue depth, success %, ban rate, last error.
+   * Retry button (POST /v1/crawl/retry?company_id=...).
+5. Settings → Application Profiles
+   * Form wizard (steps: Demographics (optional), Work Auth, Files Mapping, Preview JSON).
+   * Secure fields masked; consent toggles gating optional demographic fields.
+6. Settings → Account
+   * API keys (future), theme toggle, notification preferences.
+
+### 20.5 Component Strategy
+* Tables: TanStack Table + React Virtual for performance beyond ~500 rows.
+* Forms: `react-hook-form` + Zod resolver; mirrored with Pydantic models.
+* Theme: `next-themes` with system/dark/light.
+* Toasts: shadcn/ui `<ToastProvider>` for async success/error.
+* Dialogs: Radix Dialog + controlled forms for review loop prompts.
+* Diff: dynamic import diff component (avoid SSR mismatch). Lazy load heavy libs.
+* Mermaid: dynamic import + hydration guard; pre-parse diagrams (optional) in a worker.
+
+### 20.6 Auth & Session Model
+* **NextAuth Credentials Provider** posting to FastAPI `/v1/auth/login`.
+* FastAPI returns JWT (short-lived, e.g., 15m) + refresh token (HTTP-only cookie) OR sets signed session cookie directly.
+* API calls include cookie; SSR uses `fetch` with `cookies()` injection.
+* Access token rotation via endpoint `/v1/auth/refresh` triggered on 401.
+
+### 20.7 Real-Time Channels
+WebSocket namespaces / event types:
+* `crawl_status`: {company_id, pages_scraped, success_rate, last_error, updated_at}
+* `apply_status`: {application_id, stage, percent, error?}
+* `review_progress`: {review_id, stage: queued|generating|complete}
+* `review_complete`: {review_id, score, strengths[], weaknesses[], plan_summary}
+
+Client side WebSocket manager (`ws.ts`):
+* Reconnect with backoff.
+* Dispatch events → `queryClient.invalidateQueries(['matches'])` or update ephemeral state stores (Zustand) to avoid full refetch floods.
+
+### 20.8 Validation & Type Sharing
+Workflow:
+1. FastAPI produces OpenAPI (`openapi.json`).
+2. Codegen script (e.g., `openapi-typescript`) outputs TS types.
+3. Manual Zod schemas wrap critical payloads (e.g., ApplicationProfileInput) or generate via `zod-to-ts` roundtrip.
+4. Ensure field parity check script (CI) compares Pydantic model field sets vs. Zod schema keys.
+
+### 20.9 File Upload Flow (Resume / Artifacts)
+1. User selects file → client requests `POST /v1/uploads/presign {kind: 'resume/pdf', size, hash}`.
+2. Backend returns presigned URL + canonical file URL.
+3. PUT to S3/MinIO.
+4. Notify backend: `POST /v1/resumes/ingest {file_url, original_name}`.
+5. UI polls or subscribes to `resume_ingest_status` events (optional future channel).
+
+### 20.10 Review Loop UX (Ties to Section 19)
+* Button: “Start AI Review” (disabled if pending review exists).
+* Progress inline skeleton; on completion show score delta vs previous iteration.
+* “Generate AI Rewrite” vs “Upload Manual Revision” side-by-side CTA.
+* Display diff previews BEFORE accepting rewrite (render patch summary lines top N changed bullets / sections only).
+
+### 20.11 Performance Considerations
+* Table virtualization beyond 300 rows.
+* Cache heavy static lists (companies) with ISR (revalidate 10m) OR client query caching.
+* Suspense boundaries around charts & mermaid diagrams.
+* Lazy load rarely used modals (dynamic import).
+
+### 20.12 Accessibility & Theming
+* Rely on Radix primitives (focus management, ARIA roles).
+* Provide high contrast theme variant & respect `prefers-reduced-motion`.
+* Color tokens defined in Tailwind config; semantic color classes (e.g., `text-score-positive`).
+
+### 20.13 Error Handling UX
+* Global error boundary for network/auth errors → session refresh attempt → fallback sign-in.
+* Inline row-level error badges (e.g., failed apply attempt) with tooltip details.
+* Retry buttons dispatch idempotent endpoints (carry `Idempotency-Key` header when rewriting/resubmitting).
+
+### 20.14 Security Notes
+* Strict CSP (script-src 'self' 'unsafe-inline' for dev; hashed in prod; allow OpenAI domain if calling from edge—not recommended; keep LLM calls server-side).
+* HTTP-only cookies only; no tokens in localStorage.
+* Form tamper detection: server re-validates all Zod/Pydantic constraints.
+
+### 20.15 Deployment Strategy
+Option A: Single monorepo; Docker Compose adds `frontend` service building Next.js → served by Node (or output static + standalone). 
+Option B: Separate repository pulling OpenAPI spec; more overhead—**defer**.
+CI Steps:
+1. Lint (ESLint + TypeScript).
+2. Generate types from OpenAPI; fail if git diff appears (forces commit).
+3. Playwright component smoke tests (later).
+4. Build image & push.
+
+### 20.16 Incremental Implementation Plan
+1. Scaffold Next.js app + Tailwind + shadcn/ui tokens.
+2. Integrate NextAuth credentials; stub login page.
+3. Implement API client + React Query base config (error toasts, retry=1 for POST).
+4. Build Matches page (read-only) → ensures endpoint parity.
+5. Add Resume Versions page with timeline & diff (mock data first).
+6. WebSocket subscription lines for crawl monitor (basic status numbers).
+7. Application Profiles form (Zod <-> Pydantic sync script + test).
+8. Integrate review loop UX; show iteration improvements.
+9. Add theming + accessibility audit (Lighthouse, axe).
+10. Optimize performance (virtualization, dynamic imports) & finalize deployment.
+
+### 20.17 Open Questions
+* Do we allow anonymous exploration (read-only demo with synthetic data)?
+* Edge runtime (Next.js) for some GET endpoints vs all server calls through Python? (Leaning centralized Python to keep logic single-sourced.)
+* tRPC/GraphQL layer later? (Currently no—REST good enough; add ETag caching.)
+
+### 20.18 Future Enhancements
+* Offline-first resume editing (local draft) before uploading.
+* Real-time collaborative editing of Application Profiles.
+* Advanced analytics dashboards (job funnel, iteration improvement curves).
+
+---
+
+This frontend section establishes a concrete, incremental path to layering a modern, accessible UI on top of the existing FastAPI + Postgres architecture while preserving clear contracts and minimizing drift between back and front validation models.
