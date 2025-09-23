@@ -1,31 +1,3 @@
-# LazyJobSearch
-
-Full architecture & system design has moved to `docs/ARCHITECTURE.md`.
-
-## What Is This?
-LazyJobSearch ingests resumes, crawls & embeds job descriptions, prefilters with FTS + vector similarity, scores matches via LLM, and (optionally) auto‑applies using portal templates with secure credential handling.
-
-## Quick Start (planned)
-1. Start infra (Compose: Postgres+pgvector, Redis, MinIO)
-2. Seed companies & portal configs
-3. Upload resume via CLI
-4. Run crawler & JD processor
-5. Generate matches
-6. (Optional) Auto‑apply selected matches
-
-## Documentation
-See `docs/ARCHITECTURE.md` for:
-* High-level & apply-extended architecture diagrams
-* Complete ER model (experiences, bullets, reviews, applications)
-* Sequence diagrams (ingest, crawl, match, apply)
-* Auto-apply template DSL & events/artifacts schema
-* Security, observability, roadmap
-
-## Contributing
-Open issues for new adapters, template DSL changes, or schema evolution. Keep the root README minimal; add deep docs under `docs/`.
-
----
-Maintained design: `docs/ARCHITECTURE.md`
 # Job-Match Scraper System Design (Python + Selenium + Postgres/pgvector)
 
 **Goal:** <br>	End‑to‑end pipeline to: <br>	(1) ingest & parse resumes, <br>	(2) crawl company career sites with Selenium, <br>	(3) store & compress job descriptions, <br>	(4) tokenize & embed resume/JD chunks, <br>	(5) pre‑filter with FTS & vector similarity, and <br>	(6) LLM‑score best matches.
@@ -43,17 +15,9 @@ graph TD
   JPROC[JD Processor]
   EMBED[Embedding Service]
   LLM[LLM Scoring]
-  MATCHER[Matcher]
   PG[(Postgres+pgvector)]
   OBJ[(Object Store)]
   MQ[(Queue)]
-
-  ORCH[Apply Orchestrator]
-  TEMPL[Portal Templates]
-  CREDS[Cred Vault]
-  SESS[Session Cache]
-  ADAPT[Portal Adapters]
-  EVID[Evidence Collector]
 
   U --> PG
   U --> SCHED
@@ -66,18 +30,6 @@ graph TD
   EMBED --> PG
   PG --> LLM
   LLM --> PG
-  PG --> MATCHER
-  MATCHER --> ORCH
-  U --> ORCH
-  ORCH --> PG
-  ORCH --> TEMPL
-  ORCH --> CREDS
-  ORCH --> SESS
-  ORCH --> ADAPT
-  ADAPT --> PG
-  ADAPT --> OBJ
-  ADAPT --> EVID
-  EVID --> OBJ
 ```
 
 **Notes**
@@ -93,8 +45,6 @@ graph TD
 ```mermaid
 erDiagram
   RESUMES ||--o{ RESUME_CHUNKS : has
-  RESUMES ||--o{ RESUME_EXPERIENCES : has
-  RESUME_EXPERIENCES ||--o{ EXPERIENCE_BULLETS : has
   COMPANIES ||--o{ JOBS : offers
   JOBS ||--o{ JOB_CHUNKS : has
   RESUMES ||--o{ MATCHES : participates
@@ -158,32 +108,7 @@ erDiagram
     text prompt_hash
     timestamptz scored_at
   }
-  RESUME_EXPERIENCES {
-    uuid id
-    uuid resume_id
-    text company
-    text title
-    text location
-    date start_date
-    date end_date
-    bool current
-    text employment_type
-  }
-  EXPERIENCE_BULLETS {
-    uuid id
-    uuid experience_id
-    int position
-    text bullet_text
-    int token_count
-  }
 ```
-
-**Experience Modeling Notes**
-
-* `RESUME_EXPERIENCES` captures structured roles (company, title, dates, current flag, employment type).
-* `EXPERIENCE_BULLETS` stores ordered responsibility/impact statements; `position` preserves ordering.
-* Bullets can later be embedded directly or merged into `RESUME_CHUNKS` if desired. Keeping them separate gives finer‑grained control for skill extraction & delta updates.
-* Potential future tables: `EXPERIENCE_SKILLS (experience_id, skill, source)` or normalization of companies.
 
 **Indexes & Extensions**
 
@@ -315,7 +240,6 @@ repo/
 * FTS prefilter + vector similarity top‑K
 * LLM scoring (0–100) + reasons/gaps → `matches`
 * Daily digest of top matches
-* Additional key words for search.. (SHPE Conference, NSBE, SASE) 
 
 ### Phase 2 (High ROI)
 
@@ -397,7 +321,7 @@ CREATE UNIQUE INDEX jobs_url_uidx ON jobs(url);
 
 ## 10) Observability & Ops
 
-* **Logging**: struct logs (JSON) with job\_id, company\_id, url, status\_code.
+* **Logging**: struct logs (JSON) with job_id, company_id, url, status_code.
 * **Metrics**: scrape success rate, pages/min, dedupe rate, embedding latency, cosine distribution, LLM cost per match.
 * **Tracing**: OpenTelemetry optional; at least correlation IDs across workers.
 * **Dead-letter**: failed scrape jobs → DLQ table with reason & retry policy.
@@ -536,7 +460,7 @@ Extend `RESUMES`:
 
 * `version` (int, default 1)
 * `parent_resume_id` (uuid, nullable) // chain for lineage
-* `metadata_tags` (text\[]) // user-provided keywords
+* `metadata_tags` (text[]) // user-provided keywords
 * `description` (text) // user-provided v2 summary
 * `active` (bool) // which version is used by default
 
@@ -676,7 +600,7 @@ sequenceDiagram
 **Phase 2**
 
 * Additional portals (Workday, SuccessFactors, Taleo)
-* Templateable Q\&A mapping per company (salary, relocation)
+* Templateable Q&A mapping per company (salary, relocation)
 * Cover‑letter generator tied to chosen resume version
 * Per‑job resume v2 caching (reuse for same company family)
 
@@ -684,107 +608,142 @@ sequenceDiagram
 
 * ATS integration via APIs (if a company exposes one)
 * Multi‑user team roles/permissions
-```
 
 ---
 
-## 19) Auto-Apply & Application Tracking Architecture
+## 19) Iterative AI Resume Improvement Loop (New Addition)
 
-### 19.1 Components
+### 19.1 Why This Addition
+The previous sections (18.3–18.4) describe a single optional creation of a Resume v2 after an initial LLM review. They do NOT explicitly define a multi‑iteration loop where the user can repeatedly refine (either manually or via AI rewrite) and receive fresh feedback until satisfied. This section introduces that iterative capability.
 
-* **Apply Orchestrator**: Coordinates end-to-end apply flow (select template, login/session, execute steps, persist results).
-* **Portal Template Library**: DSL-driven step definitions per ATS portal (Greenhouse, Lever, Workday, Taleo, SuccessFactors, Oracle, etc.).
-* **Portal Adapters**: Runtime executor (Selenium/Playwright) interpreting templates; handles waits, retries, element resolution.
-* **Credential Vault & Session Cache**: Secure storage for user credentials (encrypted) + reusable cookie jars/session tokens.
-* **Evidence Collector**: Captures DOM snapshot, screenshot, optional PDF/HTML receipt, and stores metadata.
-* **Application Events & Artifacts Stores**: Append-only history + blob references.
-* **Interview Prep View**: Aggregates JD + resume version + LLM review + bullet alignment for user review.
+### 19.2 Goals
+* Allow multiple review → revise → re‑review cycles ("iterations") before applying.
+* Track lineage: which review produced which revision.
+* Provide both: (a) automated AI rewrite (apply edit plan) and (b) user‑uploaded manual revision.
+* Enforce configurable iteration cap (default 3–4) to control LLM cost.
+* Let user mark a resume version as “satisfied_for_job” to unblock auto‑apply.
 
-### 19.2 Data Model Additions (Summary)
+### 19.3 Data Model Extensions
+Augment existing tables instead of creating many new ones to keep migration simple.
 
+REVIEWS (new / clarified columns)
+* id (uuid PK)
+* job_id (uuid FK)
+* resume_id (uuid FK) — the resume version that was evaluated.
+* iteration (int) — starts at 1 for the first review of a given job & root resume chain.
+* parent_review_id (uuid, nullable) — points to the previous iteration's review; NULL for first.
+* improvement_plan_json (jsonb) — structured version of `improvement_brief` (list of edit directives).
+* status (text) — PENDING | COMPLETED | SUPERSEDED | CANCELLED.
+* proposed_new_resume_id (uuid, nullable) — if an AI‑generated rewrite has been materialized but not yet accepted.
+* accepted_new_resume_id (uuid, nullable) — the resume version the user chose to continue with (either AI or manual upload). If NULL and status COMPLETED → user skipped revision.
+* satisfaction (text) — NULL | NEEDS_MORE | SATISFIED (user final decision for this job).
+
+RESUMES (additional optional columns)
+* source_review_id (uuid, nullable) — which review iteration generated or justified this version.
+* iteration_index (int, nullable) — copies the review iteration for convenience (denormalized).
+
+Optional (future) helper table for auditing diffs:
+RESUME_EDIT_DIFFS(
+  id uuid PK,
+  from_resume_id uuid FK,
+  to_resume_id uuid FK,
+  diff_md text,
+  changed_tokens int,
+  created_at timestamptz
+)
+
+### 19.4 Iteration Lifecycle State Machine
+
+States (per job + active resume lineage):
+1. INITIAL_REVIEW_REQUESTED
+2. REVIEWING (LLM generating review) → emits REVIEWS(iteration=1)
+3. AWAITING_USER_DECISION
+   * User options: ACCEPT_AI_REWRITE | UPLOAD_MANUAL | REQUEST_NEW_REVIEW | APPLY_NOW | STOP
+4. APPLYING_AI_REWRITE (optional) → creates proposed_new_resume_id
+5. MANUAL_UPLOAD_PENDING (user posts new file) → new resume parsed & embedded
+6. REVISION_READY → user must ACCEPT (sets accepted_new_resume_id) or DISCARD (returns to AWAITING_USER_DECISION)
+7. NEXT_ITERATION_REQUESTED → loop back to REVIEWING (iteration+1)
+8. SATISFIED (user marks satisfaction) → gate cleared for Auto‑Apply
+9. ABORTED (user stops early) → can still apply with last accepted resume
+
+### 19.5 Sequence Diagram (Iterative Loop)
+```mermaid
+sequenceDiagram
+  actor User
+  participant PG as Postgres
+  participant M as Matcher
+  participant L as LLM Reviewer
+  participant RW as Rewrite Worker
+
+  M->>L: Request initial review (iteration=1)
+  L-->>PG: REVIEWS row (iteration=1, improvement_plan_json)
+  PG-->>User: Display score + plan
+  loop Until SATISFIED or Iteration Cap
+    alt User chooses AI rewrite
+      User->>RW: Generate revised resume
+      RW->>PG: Create RESUMES v(n+1) (source_review_id)
+      RW->>PG: Update REVIEWS.proposed_new_resume_id
+      User->>PG: Accept proposed version
+      PG->>PG: Update REVIEWS.accepted_new_resume_id
+    else User uploads manual revision
+      User->>PG: Upload file
+      PG->>PG: Parse + chunk + embed → new RESUMES v(n+1)
+      PG->>PG: Update REVIEWS.accepted_new_resume_id
+    end
+    User->>PG: Request another review (if not satisfied)
+    PG->>L: Trigger new review (iteration = prev+1, parent_review_id)
+    L-->>PG: Store new REVIEWS row
+    PG-->>User: Return new feedback
+  end
+  User->>PG: Mark SATISFIED
+  PG-->>User: Auto‑apply becomes enabled
 ```
-PORTALS(id, name, family, notes, created_at)
-PORTAL_TEMPLATES(id, portal_id FK, version, dsl_json, is_active, created_at)
-COMPANY_PORTAL_CONFIGS(id, company_id FK, portal_id FK, login_url, apply_base_url, quirks_json, created_at)
-PORTAL_FIELD_DICTIONARY(id, key UNIQUE, description, required, pii_level, created_at)
-USER_CREDENTIALS(id, user_id FK, portal_family, username, password_ciphertext, totp_secret_ciphertext, updated_at)
-SESSIONS(id, user_id FK, portal_family, cookie_jar jsonb, expires_at, created_at)
-APPLICATION_EVENTS(id, application_id FK, at, kind, detail_json)
-APPLICATION_ARTIFACTS(id, application_id FK, type, url, sha256, created_at)
-```
 
-Recommended indexes: `(portal_id,is_active)`, `(company_id)`, `(user_id, portal_family)`, `(application_id, at)`.
+### 19.6 API / CLI Contract (Draft)
+Endpoints (pseudo):
+* POST /reviews/{job_id}/start → triggers iteration=1 if none exists.
+* POST /reviews/{review_id}/rewrite (mode=auto) → queues AI rewrite.
+* POST /reviews/{review_id}/upload → multipart file; returns new resume id.
+* POST /reviews/{review_id}/next → creates next iteration (requires accepted resume version).
+* POST /reviews/{review_id}/satisfied → sets satisfaction=SATISFIED, cascades to mark resume version as active for that job context.
 
-### 19.3 Portal Template DSL (Excerpt)
+### 19.7 LLM Rewrite Guardrails
+* Hard cap: max_iterations_per_job (e.g., 4) stored in configuration.
+* Cost estimator: track tokens per iteration; refuse further loops if monthly budget exceeded.
+* Detect minimal change: if diff < threshold tokens & user requested new iteration → prompt user to supply additional guidance.
 
-```json
-{
-  "start": {"url": "{{apply_base_url}}"},
-  "steps": [
-    {"action":"click","selector":"button.apply"},
-    {"action":"type","selector":"input[name=email]","value":"{{profile.email}}"},
-    {"action":"upload","selector":"input[type=file][name=resume]","file":"{{files.resume}}"},
-    {"action":"select","selector":"select[name=veteran]","value":"{{answers.veteran_status}}"},
-    {"action":"radio","selector":"input[name=ethnicity][value='{{answers.ethnicity}}']"},
-    {"action":"next"},
-    {"action":"wait","until":"selector","selector":"button.submit"},
-    {"action":"submit","selector":"button.submit"}
-  ],
-  "receipt": {"selector":"a.confirmation-link"},
-  "validate": [
-    {"selector":"div.error","severity":"warn"},
-    {"selector":"#captcha","severity":"block"}
-  ]
-}
-```
+### 19.8 Prompt Strategy Enhancements
+Two prompts:
+1. REVIEW_PROMPT → produce structured JSON (score, strengths[], weaknesses[], improvement_plan[{section, rationale, action_type, suggested_text}]).
+2. REWRITE_PROMPT → given improvement_plan + user guidance deltas, output revised sections only (partial update) to reduce hallucination.
 
-Values resolve from: application profile answers, file map, selected resume version, company portal config overrides.
+### 19.9 Matching & Resume Version Selection
+During the loop, only the latest accepted resume version (accepted_new_resume_id) participates in incremental re‑matching if user requests “recalculate match impact”. This allows showing delta in vector_score / llm_score before final satisfaction.
 
-### 19.4 Apply Flow (Lifecycle)
+### 19.10 Metrics
+* review_iterations_per_job (histogram)
+* rewrite_latency_seconds
+* token_usage_review vs token_usage_rewrite
+* satisfaction_rate (satisfied / total review sessions)
+* avg_score_delta_per_iteration (improvement tracking)
 
-1. User selects a match → clicks Auto-Apply (chooses resume v1/v2 + application profile).
-2. Orchestrator loads company portal config & active template.
-3. Session retrieved or login performed (credentials decrypted in-memory only).
-4. Template executed step-by-step (retry/backoff on transient failures).
-5. Evidence captured (DOM, screenshot, receipt URL/ID).
-6. `APPLICATION_EVENTS` appended for each stage; `APPLICATION_ARTIFACTS` for blobs.
-7. Status transitions: `Draft → Filling → Submitted → Confirmed` (or `Error`).
+### 19.11 Failure & Retry
+* If rewrite fails → status stays AWAITING_USER_DECISION; user can retry or upload manually.
+* Partial resume parse failure → discard version, log error artifact.
 
-### 19.5 Events & Artifacts
+### 19.12 Minimal Initial Implementation Plan
+1. Add new columns to REVIEWS + RESUMES (nullable; backfill default NULL, iteration=1 for legacy rows if any).
+2. Implement endpoint to trigger initial review; store iteration=1.
+3. Implement rewrite worker stub (accepts plan JSON; returns modified sections with deterministic markers for diffing).
+4. Add diff utility (Markdown or inline JSON) to compute changed_tokens.
+5. Add loop control & iteration cap enforcement.
+6. Integrate with auto‑apply gating (require satisfaction OR explicit override).
 
-Sample events: `Created`, `Login`, `Filled`, `Submitted`, `ReceiptSaved`, `Error`, `FollowupDue`.
-
-Artifacts types: `dom_snapshot`, `screenshot`, `pdf`, `receipt_html`.
-
-### 19.6 Interview Prep Packet
-
-Generated view (or cached PDF) containing:
-* JD full text & requirement extraction
-* Resume version used (+ diff vs baseline)
-* LLM review (strengths / weaknesses / gaps / talking points)
-* Skill alignment matrix (JD skill → present? → evidence bullet)
-* Application metadata (submitted_at, portal, receipt, artifacts)
-
-### 19.7 Security & Privacy
-
-* Encrypt credentials & sensitive profile fields (pgcrypto/KMS).
-* Strict service-layer access to `USER_CREDENTIALS`.
-* No EEO / sensitive answers are sent to LLM prompts.
-* Redact secrets & PII from logs; structured logging with correlation IDs.
-
-### 19.8 Reliability & Guardrails
-
-* Dry-run mode (simulate & capture form fill before submit).
-* Selector drift detection → flag template for review.
-* Captcha detection → pause + user notification.
-* Exponential backoff & max retry counts per step.
-* Rate limits per portal & per company.
-
-### 19.9 Future Enhancements
-
-* Heuristic portal inference for long-tail ATS.
-* A/B resume strategy experiments (resume v1 vs v2 performance).
-* Auto follow-up reminders (event scheduled N days post-submission).
-* Adaptive field value suggestions (local model) with explicit opt-in.
+### 19.13 Out‑of‑Scope (Future)
+* Automatic per‑job cover letter co‑evolution alongside resume iterations.
+* Multi‑objective optimization (score vs. ATS keyword density vs. length).
+* Per‑section experimentation (A/B of bullet variants) with uplift modeling.
 
 ---
+
+This section formalizes the iterative improvement feature. Earlier content implied only a single optional revision; now the design explicitly supports repeated feedback loops until the user is satisfied or a configured cap is reached.

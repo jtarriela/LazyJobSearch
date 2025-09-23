@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "meta": {"portal": "greenhouse", "variant": "basic", "author": "example"},
+  "start": {"url": "https://jobs.example.com/apply/12345"},
+  "steps": [
+    {"action": "click", "selector": "button.apply"},
+    {"action": "type", "selector": "input[name=email]", "value": "{{profile.email}}"},
+    {"action": "type", "selector": "input[name=first_name]", "value": "{{profile.first_name}}"},
+    {"action": "type", "selector": "input[name=last_name]", "value": "{{profile.last_name}}"},
+    {"action": "upload", "selector": "input[type=file][name=resume]", "file": "{{files.resume}}"},
+    {"action": "select", "selector": "select[name=veteran_status]", "value": "{{answers.veteran_status}}"},
+    {"action": "radio", "selector": "input[name=eeo_ethnicity][value='{{answers.ethnicity}}']"},
+    {"action": "next"},
+    {"action": "wait", "waitFor": "selector", "waitSelector": "button.submit"},
+    {"action": "submit", "selector": "button.submit"}
+  ],
+  "receipt": {"selector": "div.confirmation a.receipt-link"},
+  "validate": [
+    {"selector": "div.error", "severity": "warn"},
+    {"selector": "#captcha", "severity": "block"}
+  ]
+}
