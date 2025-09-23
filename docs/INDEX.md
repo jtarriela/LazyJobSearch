@@ -4,11 +4,14 @@ Central design & reference docs for LazyJobSearch.
 
 ## Core Design
 - [Architecture & System Design](./ARCHITECTURE.md)
+- [Project Roadmap](./ROADMAP.md)
+- [Technical Review Packet](./TECHNICAL_REVIEW_PACKET.md)
+- [CLI Design](./CLI_DESIGN.md)
 - [Architecture Decision Records (ADR Index)](./adrs/README.md)
 - [Portal Template DSL Schema](./portal_template_dsl.schema.json)
 
 ## Data Contracts
-- [Schema Catalog](./schema/) (per-table markdown: jobs, resumes, matches, reviews, applications, portals)
+- [Schema Catalog](./schema/) (per-table markdown: companies, jobs, resumes, matches, reviews, applications, portals)
 
 ## Examples
 - [Example Portal Template: Greenhouse Basic](./examples/portal_templates/greenhouse_basic.json)

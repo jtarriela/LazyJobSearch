@@ -3,6 +3,7 @@
 | Column | Type | Notes |
 |--------|------|-------|
 | id | uuid PK | |
+| user_id | uuid nullable | Future: link to user accounts |
 | fulltext | text | Parsed resume plain text |
 | sections_json | jsonb | Structured sections (education, experience, etc.) |
 | skills_csv | text | CSV skills list |
@@ -11,10 +12,4 @@
 | edu_level | text | Highest degree normalized |
 | file_url | text | Original file artifact |
 | created_at | timestamptz | Ingest timestamp |
-| version | int | Version number (default 1) |
-| parent_resume_id | uuid nullable | Pointer to prior version |
-| metadata_tags | text[] | User-provided tags |
-| description | text | User summary of version |
-| active | bool | Active default? |
-| source_review_id | uuid nullable | Review that generated this version |
-| iteration_index | int nullable | Mirrors review iteration |
+| is_active | bool | For A/B testing multiple resumes |
