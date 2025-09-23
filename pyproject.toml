@@ -16,6 +16,11 @@ dependencies = [
   "rich>=13.7",
   "typer[all]>=0.12.3",
   "jsonschema>=4.22",
+  "torch>=2.0.0",
+  "selenium>=4.0",
+  "beautifulsoup4>=4.9",
+  "requests>=2.25",
+  "alembic>=1.8",
 ]
 
 [project.optional-dependencies]
@@ -26,6 +31,10 @@ dev = [
 
 [project.scripts]
 ljs = "cli.ljs:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cli*", "libs*", "config*", "apps*"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
