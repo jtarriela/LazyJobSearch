@@ -275,14 +275,15 @@ class ResumeIngestionService:
                 # Create resume chunk records
                 resume_chunks = []
                 for chunk in chunks:
-                    # Convert embedding list to pgvector format
-                    embedding_str = str(chunk["embedding"]) if chunk["embedding"] else None
+                    # Convert embedding list to proper format for pgvector
+                    # pgvector expects a list of floats, not a string
+                    embedding_data = chunk["embedding"] if chunk["embedding"] else None
                     
                     resume_chunk = ResumeChunk(
                         id=str(uuid.uuid4()),
                         resume_id=resume_id,
                         chunk_text=chunk["text"],
-                        embedding=embedding_str,  # Store as string for now, pgvector will handle conversion
+                        embedding=embedding_data,  # pgvector Vector column will handle list conversion
                         token_count=chunk["token_count"],
                         embedding_version=chunk.get("embedding_version"),
                         embedding_model=chunk.get("embedding_model"),

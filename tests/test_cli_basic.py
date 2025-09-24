@@ -29,7 +29,7 @@ def test_companies_seed_dry_run(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     seed_file = Path('companies.txt')
     seed_file.write_text("Acme\nBetaCorp\n")
-    result = runner.invoke(APP, ["--dry-run", "companies", "seed", "--file", str(seed_file)])
+    result = runner.invoke(APP, ["--dry-run", "companies", "seed", str(seed_file)])
     assert result.exit_code == 0
     assert 'DRY' in result.stdout
 
