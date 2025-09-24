@@ -1,0 +1,255 @@
+{
+  "version": 1,
+  "meta": {
+    "portal": "bamboohr",
+    "variant": "basic",
+    "author": "LazyJobSearch Team", 
+    "description": "Basic BambooHR ATS portal automation template"
+  },
+  "start": {
+    "url": "{{apply_base_url}}",
+    "wait": 2000
+  },
+  "preconditions": [
+    {
+      "type": "exists",
+      "selector": ".application-form, form#application-form"
+    }
+  ],
+  "steps": [
+    {
+      "id": "personal_first_name",
+      "action": "type",
+      "selector": "input[name='firstName'], input[name='first_name']",
+      "value": "{{profile.first_name}}"
+    },
+    {
+      "id": "personal_last_name",
+      "action": "type",
+      "selector": "input[name='lastName'], input[name='last_name']", 
+      "value": "{{profile.last_name}}"
+    },
+    {
+      "id": "contact_email",
+      "action": "type",
+      "selector": "input[name='email']",
+      "value": "{{profile.email}}"
+    },
+    {
+      "id": "contact_phone",
+      "action": "type",
+      "selector": "input[name='phone'], input[name='phoneNumber']",
+      "value": "{{profile.phone}}"
+    },
+    {
+      "id": "address_street",
+      "action": "type",
+      "selector": "input[name='address'], input[name='street']",
+      "value": "{{profile.address}}",
+      "skipIf": [
+        {
+          "selector": "input[name='address'], input[name='street']",
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "address_city",
+      "action": "type",
+      "selector": "input[name='city']",
+      "value": "{{profile.city}}",
+      "skipIf": [
+        {
+          "selector": "input[name='city']",
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "address_state",
+      "action": "select",
+      "selector": "select[name='state'], select[name='region']",
+      "option": "{{profile.state}}",
+      "skipIf": [
+        {
+          "selector": "select[name='state'], select[name='region']", 
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "address_zip",
+      "action": "type",
+      "selector": "input[name='zip'], input[name='zipCode'], input[name='postalCode']",
+      "value": "{{profile.zip_code}}",
+      "skipIf": [
+        {
+          "selector": "input[name='zip'], input[name='zipCode'], input[name='postalCode']",
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "resume_upload",
+      "action": "upload",
+      "selector": "input[type='file'][name*='resume']",
+      "file": "{{files.resume}}",
+      "waitFor": "network-idle",
+      "timeoutMs": 10000
+    },
+    {
+      "id": "cover_letter",
+      "action": "upload",
+      "selector": "input[type='file'][name*='cover']",
+      "file": "{{files.cover_letter}}",
+      "skipIf": [
+        {
+          "selector": "input[type='file'][name*='cover']",
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "linkedin_url",
+      "action": "type",
+      "selector": "input[name*='linkedin'], input[name*='LinkedIn']",
+      "value": "{{profile.linkedin_url}}",
+      "skipIf": [
+        {
+          "selector": "input[name*='linkedin'], input[name*='LinkedIn']",
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "website_url",
+      "action": "type",
+      "selector": "input[name*='website'], input[name*='portfolio']",
+      "value": "{{profile.website_url}}",
+      "skipIf": [
+        {
+          "selector": "input[name*='website'], input[name*='portfolio']",
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "work_authorization",
+      "action": "radio",
+      "selector": "input[name*='workAuth'][value='{{answers.work_authorization}}']",
+      "skipIf": [
+        {
+          "selector": "input[name*='workAuth']",
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "willing_to_relocate",
+      "action": "radio",
+      "selector": "input[name*='relocate'][value='{{answers.willing_to_relocate}}']",
+      "skipIf": [
+        {
+          "selector": "input[name*='relocate']", 
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "eeo_gender",
+      "action": "select",
+      "selector": "select[name*='gender']",
+      "option": "{{answers.gender}}",
+      "skipIf": [
+        {
+          "selector": "select[name*='gender']",
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "eeo_race",
+      "action": "select",
+      "selector": "select[name*='race'], select[name*='ethnicity']",
+      "option": "{{answers.ethnicity}}",
+      "skipIf": [
+        {
+          "selector": "select[name*='race'], select[name*='ethnicity']",
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "eeo_veteran",
+      "action": "select",
+      "selector": "select[name*='veteran']",
+      "option": "{{answers.veteran_status}}",
+      "skipIf": [
+        {
+          "selector": "select[name*='veteran']",
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "eeo_disability",
+      "action": "select",
+      "selector": "select[name*='disability']",
+      "option": "{{answers.disability_status}}",
+      "skipIf": [
+        {
+          "selector": "select[name*='disability']",
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "submit_application",
+      "action": "click",
+      "selector": "input[type='submit'], button[type='submit'], .submit-button",
+      "waitFor": "network-idle",
+      "timeoutMs": 15000
+    }
+  ],
+  "receipt": {
+    "selector": ".confirmation-message, .success-message, .application-submitted",
+    "regex": "Application.*submitted|Reference.*number.*([A-Z0-9-]+)"
+  },
+  "validate": [
+    {
+      "selector": ".error, .field-error, .validation-error",
+      "severity": "warn",
+      "message": "Form validation error detected"
+    },
+    {
+      "selector": ".required-field-error",
+      "severity": "block", 
+      "message": "Required field missing"
+    },
+    {
+      "selector": ".captcha, .recaptcha",
+      "severity": "block",
+      "message": "CAPTCHA challenge detected"
+    }
+  ],
+  "errorRecovery": {
+    "field_error": {
+      "steps": [
+        {
+          "action": "scroll",
+          "selector": ".error, .field-error"
+        },
+        {
+          "action": "wait",
+          "waitFor": "timeout", 
+          "timeoutMs": 1000
+        }
+      ],
+      "maxAttempts": 1
+    }
+  },
+  "throttle": {
+    "betweenStepsMs": 800,
+    "jitterMs": 400
+  }
+}

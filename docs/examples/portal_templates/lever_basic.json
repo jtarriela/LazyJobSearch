@@ -1,0 +1,182 @@
+{
+  "version": 1,
+  "meta": {
+    "portal": "lever", 
+    "variant": "basic",
+    "author": "LazyJobSearch Team",
+    "description": "Basic Lever ATS portal automation template"
+  },
+  "start": {
+    "url": "https://jobs.lever.co/company/{{company_slug}}/{{job_id}}/apply",
+    "wait": 2000
+  },
+  "preconditions": [
+    {
+      "type": "exists",
+      "selector": "form.application-form"
+    }
+  ],
+  "steps": [
+    {
+      "id": "personal_info_name",
+      "action": "type",
+      "selector": "input[name='name']",
+      "value": "{{profile.first_name}} {{profile.last_name}}",
+      "waitFor": "dom-stable",
+      "timeoutMs": 5000
+    },
+    {
+      "id": "personal_info_email", 
+      "action": "type",
+      "selector": "input[name='email']",
+      "value": "{{profile.email}}"
+    },
+    {
+      "id": "personal_info_phone",
+      "action": "type", 
+      "selector": "input[name='phone']",
+      "value": "{{profile.phone}}"
+    },
+    {
+      "id": "resume_upload",
+      "action": "upload",
+      "selector": "input[type='file'][name='resume']", 
+      "file": "{{files.resume}}",
+      "waitFor": "network-idle",
+      "timeoutMs": 10000
+    },
+    {
+      "id": "cover_letter_optional",
+      "action": "type",
+      "selector": "textarea[name='cover_letter']",
+      "value": "{{profile.cover_letter}}",
+      "skipIf": [
+        {
+          "selector": "textarea[name='cover_letter']",
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "linkedin_profile",
+      "action": "type",
+      "selector": "input[name='urls[LinkedIn]']",
+      "value": "{{profile.linkedin_url}}",
+      "skipIf": [
+        {
+          "selector": "input[name='urls[LinkedIn]']", 
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "website_portfolio",
+      "action": "type",
+      "selector": "input[name='urls[Website]']",
+      "value": "{{profile.website_url}}",
+      "skipIf": [
+        {
+          "selector": "input[name='urls[Website]']",
+          "predicate": "notExists" 
+        }
+      ]
+    },
+    {
+      "id": "eeo_gender",
+      "action": "select",
+      "selector": "select[data-source='eeo_gender']",
+      "option": "{{answers.gender}}",
+      "skipIf": [
+        {
+          "selector": "select[data-source='eeo_gender']",
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "eeo_ethnicity",
+      "action": "select", 
+      "selector": "select[data-source='eeo_ethnicity']",
+      "option": "{{answers.ethnicity}}",
+      "skipIf": [
+        {
+          "selector": "select[data-source='eeo_ethnicity']",
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "veteran_status",
+      "action": "select",
+      "selector": "select[data-source='eeo_veteran']", 
+      "option": "{{answers.veteran_status}}",
+      "skipIf": [
+        {
+          "selector": "select[data-source='eeo_veteran']",
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "disability_status",
+      "action": "select",
+      "selector": "select[data-source='eeo_disability']",
+      "option": "{{answers.disability_status}}",
+      "skipIf": [
+        {
+          "selector": "select[data-source='eeo_disability']",
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "submit_application",
+      "action": "click",
+      "selector": "button[type='submit']",
+      "waitFor": "network-idle",
+      "timeoutMs": 15000
+    }
+  ],
+  "receipt": {
+    "selector": ".application-confirmation .confirmation-message",
+    "attribute": "data-application-id", 
+    "regex": "Application ID: ([A-Za-z0-9]+)"
+  },
+  "validate": [
+    {
+      "selector": ".error-message",
+      "severity": "warn",
+      "message": "Form validation error detected"
+    },
+    {
+      "selector": ".captcha-container", 
+      "severity": "block",
+      "message": "CAPTCHA challenge detected - manual intervention required"
+    },
+    {
+      "selector": ".rate-limit-message",
+      "severity": "block", 
+      "message": "Rate limit exceeded - need to wait before retrying"
+    }
+  ],
+  "errorRecovery": {
+    "validation_error": {
+      "steps": [
+        {
+          "action": "wait",
+          "waitFor": "timeout",
+          "timeoutMs": 2000
+        },
+        {
+          "action": "scroll",
+          "selector": ".error-message"
+        }
+      ],
+      "maxAttempts": 2
+    }
+  },
+  "throttle": {
+    "betweenStepsMs": 1000,
+    "jitterMs": 500
+  }
+}

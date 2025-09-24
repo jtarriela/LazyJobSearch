@@ -1,0 +1,70 @@
+{
+  "version": "1.0",
+  "source": "manual_research_2024",
+  "created_at": "2024-01-15T10:00:00Z",
+  "companies": [
+    {
+      "name": "Acme Corp",
+      "domain": "acme.com",
+      "careers_url": "https://acme.com/careers",
+      "description": "Leading software company specializing in enterprise solutions",
+      "industry": "Technology",
+      "size": "medium", 
+      "location": "San Francisco, CA",
+      "founded_year": 2010,
+      "stock_symbol": "ACME",
+      "linkedin_url": "https://linkedin.com/company/acme",
+      "twitter_handle": "acmecorp",
+      "tags": ["tech", "saas", "enterprise"]
+    },
+    {
+      "name": "TechStart Inc",
+      "domain": "techstart.io",
+      "description": "Innovative startup focused on AI and machine learning",
+      "industry": "Technology",
+      "size": "startup",
+      "location": "Austin, TX", 
+      "founded_year": 2020,
+      "twitter_handle": "techstartio",
+      "tags": ["ai", "startup", "remote-friendly"]
+    },
+    {
+      "name": "Global Solutions",
+      "domain": "globalsolutions.net",
+      "careers_url": "https://globalsolutions.net/join-us",
+      "description": "International consulting firm",
+      "industry": "Consulting",
+      "size": "large",
+      "location": "New York, NY",
+      "founded_year": 1995,
+      "stock_symbol": "GSOL",
+      "linkedin_url": "https://linkedin.com/company/global-solutions",
+      "twitter_handle": "globalsolutions", 
+      "tags": ["consulting", "international", "finance"]
+    },
+    {
+      "name": "DataFlow Systems",
+      "domain": "dataflow.com",
+      "careers_url": "https://careers.dataflow.com",
+      "description": "Big data analytics and processing platform",
+      "industry": "Technology",
+      "size": "medium",
+      "location": "Seattle, WA",
+      "founded_year": 2015,
+      "linkedin_url": "https://linkedin.com/company/dataflow",
+      "twitter_handle": "dataflowsys",
+      "tags": ["big-data", "analytics", "cloud"]
+    },
+    {
+      "name": "InnovateNow",
+      "domain": "innovatenow.org", 
+      "description": "Non-profit technology incubator",
+      "industry": "Non-Profit",
+      "size": "small",
+      "location": "Boston, MA",
+      "founded_year": 2018,
+      "twitter_handle": "innovatenow",
+      "tags": ["non-profit", "incubator", "social-impact"]
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+name,domain,careers_url,description,industry,size,location,founded_year,stock_symbol,linkedin_url,twitter_handle,tags
+Acme Corp,acme.com,https://acme.com/careers,Leading software company specializing in enterprise solutions,Technology,medium,San Francisco CA,2010,ACME,https://linkedin.com/company/acme,acmecorp,"tech,saas,enterprise"
+TechStart Inc,techstart.io,,Innovative startup focused on AI and machine learning,Technology,startup,Austin TX,2020,,,techstartio,"ai,startup,remote-friendly"
+Global Solutions,globalsolutions.net,https://globalsolutions.net/join-us,International consulting firm,Consulting,large,New York NY,1995,GSOL,https://linkedin.com/company/global-solutions,globalsolutions,"consulting,international,finance"
+DataFlow Systems,dataflow.com,https://careers.dataflow.com,Big data analytics and processing platform,Technology,medium,Seattle WA,2015,,https://linkedin.com/company/dataflow,dataflowsys,"big-data,analytics,cloud"
+InnovateNow,innovatenow.org,,Non-profit technology incubator,Non-Profit,small,Boston MA,2018,,,innovatenow,"non-profit,incubator,social-impact"

@@ -27,3 +27,40 @@ jobs:
       - name: Schema doc validation
         run: |
           python scripts/validate_schema_docs.py
+      - name: Portal template validation
+        run: |
+          # Validate all example portal templates against schema
+          python -c "
+          import json
+          import sys
+          from pathlib import Path
+          from jsonschema import validate, ValidationError
+          
+          schema_path = Path('docs/portal_template_dsl.schema.json')
+          templates_dir = Path('docs/examples/portal_templates')
+          
+          with open(schema_path) as f:
+              schema = json.load(f)
+          
+          errors = []
+          templates = list(templates_dir.glob('*.json'))
+          
+          for template_path in templates:
+              try:
+                  with open(template_path) as f:
+                      template = json.load(f)
+                  validate(template, schema)
+                  print(f'✅ {template_path.name} validates')
+              except ValidationError as e:
+                  errors.append(f'❌ {template_path.name}: {e.message}')
+              except Exception as e:
+                  errors.append(f'❌ {template_path.name}: {str(e)}')
+          
+          if errors:
+              print('Portal template validation errors:')
+              for error in errors:
+                  print(error)
+              sys.exit(1)
+          else:
+              print(f'All {len(templates)} portal templates validate successfully')
+          "
