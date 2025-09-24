@@ -7,8 +7,21 @@ Central design & reference docs for LazyJobSearch.
 - [Architecture Decision Records (ADR Index)](./adrs/README.md)
 - [Portal Template DSL Schema](./portal_template_dsl.schema.json)
 
+## Performance & Scalability
+- [Performance Optimization Guide](./PERFORMANCE_OPTIMIZATION.md) - Algorithm analysis, benchmarks, cost optimization
+- [Scalability Architecture Guide](./SCALABILITY_GUIDE.md) - Multi-region deployment, database sharding, auto-scaling
+- [Algorithm Specifications](./ALGORITHM_SPECIFICATIONS.md) - Detailed algorithmic implementations with complexity analysis
+
+## Implementation Guides
+- [Technical Review Packet](./TECHNICAL_REVIEW_PACKET.md) - Executive summary, metrics, risk assessment
+- [Implementation Backlog](./BACKLOG_IMPLEMENTATION.md) - Concrete follow-up tasks for production readiness
+- [Roadmap](./ROADMAP.md) - Major engineering workstreams and milestones
+
 ## Data Contracts
 - [Schema Catalog](./schema/) (per-table markdown: jobs, resumes, matches, reviews, applications, portals)
+
+## Command Line Interface
+- [CLI Design](./CLI_DESIGN.md) - Terminal interface for workflow automation
 
 ## Examples
 - [Example Portal Template: Greenhouse Basic](./examples/portal_templates/greenhouse_basic.json)
@@ -20,4 +33,4 @@ Central design & reference docs for LazyJobSearch.
 - Observability runbook & dashboards
 
 ---
-Last updated: $(date)
+Last updated: 2025-01-27
