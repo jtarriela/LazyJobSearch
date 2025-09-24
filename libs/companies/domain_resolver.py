@@ -97,7 +97,8 @@ class DomainResolverService:
         for suffix in suffixes_to_remove:
             if clean_name.endswith(f'-{suffix}'):
                 short_name = clean_name[:-len(f'-{suffix}')]
-                candidates.append(f"{short_name}.com")
+                if short_name:  # Only add if there's something left
+                    candidates.append(f"{short_name}.com")
         
         # Pattern 5: Alternative TLDs for well-known patterns
         candidates.extend([

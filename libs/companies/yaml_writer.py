@@ -9,7 +9,7 @@ import logging
 import yaml
 from pathlib import Path
 from typing import Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .models import CompanySeed
 
@@ -28,6 +28,8 @@ class YamlWriterService:
         """
         if config_dir is None:
             config_dir = Path.home() / '.lazyjobsearch'
+        elif isinstance(config_dir, str):
+            config_dir = Path(config_dir)
         
         self.config_dir = config_dir
         self.companies_dir = config_dir / 'companies'
@@ -165,6 +167,11 @@ class YamlWriterService:
                 str(url) for url in seed_dict['crawler']['start_urls']
             ]
         
+        # Convert enum values to strings for YAML serialization
+        if 'portal' in seed_dict and 'type' in seed_dict['portal']:
+            if hasattr(seed_dict['portal']['type'], 'value'):
+                seed_dict['portal']['type'] = seed_dict['portal']['type'].value
+        
         return seed_dict
     
     def _update_index(self, seed: CompanySeed) -> None:
@@ -183,7 +190,7 @@ class YamlWriterService:
                 'portal_type': seed.portal.type.value,
                 'careers_url': str(seed.careers.primary_url),
                 'created_at': seed.metadata.get('created_at'),
-                'updated_at': datetime.utcnow().isoformat(),
+                'updated_at': datetime.now(timezone.utc).isoformat(),
                 'notes': seed.notes,
             }
             

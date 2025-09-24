@@ -7,7 +7,7 @@ are auto-generated and stored in the user's configuration directory.
 from __future__ import annotations
 from pydantic import BaseModel, HttpUrl, Field, field_validator
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 import re
 
@@ -93,7 +93,7 @@ class CompanySeed(BaseModel):
     def model_post_init(self, __context):
         """Set default metadata after initialization"""
         if not self.metadata.get('created_at'):
-            self.metadata['created_at'] = datetime.utcnow().isoformat()
+            self.metadata['created_at'] = datetime.now(timezone.utc).isoformat()
         
         # Set default crawler start URLs if not provided
         if not self.crawler.start_urls:
