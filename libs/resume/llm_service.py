@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Any, Tuple
 from enum import Enum
 import asyncio
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -116,44 +117,179 @@ class MockLLMProvider:
         """Generate mock LLM completion"""
         await asyncio.sleep(0.1)  # Simulate API delay
         
-        # Extract basic info from the text for more realistic mock responses
-        text = request.prompt.lower()
+        # Extract the resume text from the prompt (after "RESUME TEXT:")
+        full_prompt = request.prompt
+        resume_text = ""
         
-        # Mock structured response based on typical resume content
+        # Find the actual resume content in the prompt
+        if "RESUME TEXT:" in full_prompt:
+            parts = full_prompt.split("RESUME TEXT:")
+            if len(parts) > 1:
+                # Get text between "RESUME TEXT:" and "Extract the following"
+                resume_section = parts[1]
+                if "Extract the following" in resume_section:
+                    resume_text = resume_section.split("Extract the following")[0].strip()
+                else:
+                    resume_text = resume_section.strip()
+        else:
+            # Fallback - use the entire prompt
+            resume_text = full_prompt
+        
+        # Extract info from the actual resume text for realistic responses
+        text = resume_text.lower()
+        
+        # Extract email
+        email_match = re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', resume_text)
+        email = email_match.group() if email_match else None
+        
+        # Extract phone 
+        phone_match = re.search(r'\b(?:\+?1[-.\s]?)?\(?([0-9]{3})\)?[-.\s]?([0-9]{3})[-.\s]?([0-9]{4})\b', resume_text)
+        phone = phone_match.group() if phone_match else None
+        
+        # Extract name (first line that looks like a name)
+        lines = resume_text.strip().split('\n')
+        name = None
+        for line in lines:
+            line = line.strip()
+            if line and not '@' in line and not any(char.isdigit() for char in line) and len(line.split()) >= 2:
+                if not any(keyword in line.lower() for keyword in ['summary', 'experience', 'education', 'skills', 'professional', 'senior', 'data']):
+                    name = line
+                    break
+        
+        # If no name found, try first line
+        if not name and lines:
+            first_line = lines[0].strip()
+            if len(first_line.split()) <= 4:  # Reasonable name length
+                name = first_line
+        
+        # Extract skills from text
+        skill_keywords = ['python', 'javascript', 'java', 'react', 'sql', 'aws', 'docker', 'kubernetes', 
+                         'tensorflow', 'pytorch', 'pandas', 'scikit-learn', 'machine learning', 'ml',
+                         'nodejs', 'angular', 'vue', 'git', 'linux', 'bash', 'mongodb', 'postgresql',
+                         'mysql', 'redis', 'elasticsearch', 'spark', 'tableau', 'statistics']
+        
+        found_skills = []
+        for skill in skill_keywords:
+            if skill in text:
+                found_skills.append(skill.title())
+        
+        # If no specific skills found, extract from skills section
+        if not found_skills:
+            skills_section = self._extract_section_content(resume_text, ['skills'])
+            if skills_section:
+                # Split by common separators
+                potential_skills = re.split(r'[,\n\r•\-]', skills_section)
+                for skill in potential_skills:
+                    skill = skill.strip()
+                    if skill and len(skill) > 2 and len(skill) < 25:
+                        found_skills.append(skill)
+        
+        # If still no skills, add generic ones
+        if not found_skills:
+            found_skills = ['Communication', 'Problem Solving', 'Teamwork']
+        
+        # Extract years of experience
+        yoe_patterns = [
+            r'(\d+(?:\.\d+)?)\s*(?:years?|yrs?)\s*(?:of\s*)?(?:experience|exp)',
+            r'(?:experience|exp)[:\s]*(\d+(?:\.\d+)?)\s*(?:years?|yrs?)',
+            r'(\d+(?:\.\d+)?)\+?\s*(?:years?|yrs?)'
+        ]
+        
+        years_exp = None
+        for pattern in yoe_patterns:
+            matches = re.findall(pattern, text)
+            if matches:
+                years_exp = float(matches[0])
+                break
+        
+        # Extract education level
+        education_level = None
+        if 'phd' in text or 'ph.d' in text or 'doctorate' in text:
+            education_level = 'phd'
+        elif 'master' in text or 'msc' in text or 'mba' in text or 'm.s' in text:
+            education_level = 'masters'  
+        elif 'bachelor' in text or 'bsc' in text or 'bs' in text or 'ba' in text or 'b.s' in text:
+            education_level = 'bachelors'
+        elif 'associate' in text:
+            education_level = 'associates'
+        
+        # Extract summary (look for summary/objective section)
+        summary = None
+        summary_section = self._extract_section_content(resume_text, ['summary', 'objective', 'profile'])
+        if summary_section:
+            # Take first sentence or two
+            sentences = summary_section.split('. ')
+            summary = '. '.join(sentences[:2]).strip()
+            if summary and not summary.endswith('.'):
+                summary += '.'
+        
+        # Extract experience entries
+        experience = []
+        exp_section = self._extract_section_content(resume_text, ['experience', 'employment', 'work history'])
+        if exp_section:
+            # Simple parsing - look for job titles and companies
+            lines = exp_section.split('\n')
+            current_job = None
+            for line in lines:
+                line = line.strip()
+                if line and not line.startswith('-') and not line.startswith('•'):
+                    # Likely a job title/company line
+                    if ' at ' in line:
+                        parts = line.split(' at ')
+                        if len(parts) == 2:
+                            current_job = {
+                                'title': parts[0].strip(),
+                                'company': parts[1].strip().split('(')[0].strip(),
+                                'duration': self._extract_duration(line),
+                                'description': 'Professional experience in the role'
+                            }
+                            experience.append(current_job)
+        
+        # Extract education entries  
+        education = []
+        edu_section = self._extract_section_content(resume_text, ['education'])
+        if edu_section:
+            lines = edu_section.split('\n')
+            for line in lines:
+                line = line.strip()
+                if line and any(word in line.lower() for word in ['bachelor', 'master', 'phd', 'degree', 'university', 'college']):
+                    education.append({
+                        'degree': line.split('\n')[0],
+                        'field': 'Related Field',
+                        'institution': self._extract_institution(line),
+                        'year': self._extract_year(line)
+                    })
+        
+        # Extract certifications
+        certifications = []
+        cert_section = self._extract_section_content(resume_text, ['certification', 'certificate', 'license'])
+        if cert_section:
+            lines = cert_section.split('\n')
+            for line in lines:
+                line = line.strip()
+                if line and len(line) > 5 and not line.lower().startswith('certification'):  # Skip section headers
+                    certifications.append(line)
+        
         mock_data = {
-            "full_name": "John Doe",
-            "email": "john.doe@email.com" if "@" in request.prompt else None,
-            "phone": "555-123-4567" if any(c.isdigit() for c in request.prompt) else None,
-            "linkedin": "linkedin.com/in/johndoe" if "linkedin" in text else None,
-            "summary": "Experienced professional with strong technical skills",
-            "skills": ["Python", "JavaScript", "React", "SQL"] if "python" in text or "javascript" in text else ["Communication", "Problem Solving"],
-            "experience": [
-                {
-                    "title": "Software Engineer",
-                    "company": "Tech Corp",
-                    "duration": "2020-2024",
-                    "description": "Developed software solutions"
-                }
-            ],
-            "education": [
-                {
-                    "degree": "Bachelor of Science",
-                    "field": "Computer Science",
-                    "institution": "University",
-                    "year": "2020"
-                }
-            ],
-            "certifications": [],
-            "years_of_experience": 4.0,
-            "education_level": "bachelors"
+            "full_name": name,
+            "email": email,
+            "phone": phone,
+            "linkedin": f"linkedin.com/in/{name.lower().replace(' ', '').replace('.', '')}" if name and 'linkedin' in text else None,
+            "summary": summary,
+            "skills": found_skills,
+            "experience": experience if experience else [{"title": "Professional", "company": "Unknown", "duration": "Recent", "description": "Professional experience"}],
+            "education": education if education else [{"degree": "Degree", "field": "Field", "institution": "Institution", "year": "Recent"}],
+            "certifications": certifications,
+            "years_of_experience": years_exp,
+            "education_level": education_level
         }
         
-        # Randomly remove some fields to test retry logic
-        import random
-        if self.request_count % 3 == 0:  # Every 3rd request has missing data
-            fields_to_remove = random.sample(["email", "phone", "skills"], 1)
+        # Remove None values to test retry logic occasionally
+        if self.request_count % 4 == 0:  # Every 4th request has missing data
+            import random
+            fields_to_remove = random.sample([k for k, v in mock_data.items() if v], 1)
             for field in fields_to_remove:
-                mock_data[field] = None if field in ["email", "phone"] else []
+                mock_data[field] = None if not isinstance(mock_data[field], list) else []
         
         response_content = json.dumps(mock_data, indent=2)
         
@@ -168,6 +304,61 @@ class MockLLMProvider:
             processing_time_ms=100.0,
             metadata={"provider": "mock", "request_count": self.request_count}
         )
+    
+    def _extract_section_content(self, text: str, keywords: List[str]) -> Optional[str]:
+        """Extract content from a section based on keywords"""
+        text_lower = text.lower()
+        lines = text.split('\n')
+        
+        # Find section start
+        section_start_idx = None
+        for i, line in enumerate(lines):
+            line_lower = line.lower().strip()
+            if any(keyword in line_lower for keyword in keywords):
+                section_start_idx = i + 1
+                break
+        
+        if section_start_idx is None:
+            return None
+        
+        # Find section end (next section or end of text)
+        section_lines = []
+        for i in range(section_start_idx, len(lines)):
+            line = lines[i].strip()
+            # Stop if we hit another section header
+            if (line and line.isupper() and len(line.split()) <= 3 and 
+                any(sec in line.lower() for sec in ['experience', 'education', 'skills', 'summary', 'contact'])):
+                break
+            section_lines.append(line)
+        
+        return '\n'.join(section_lines).strip()
+    
+    def _extract_duration(self, text: str) -> str:
+        """Extract duration from text"""
+        import re
+        # Look for patterns like (2020-2024) or 2020-2024
+        duration_match = re.search(r'\(?(20\d{2})\s*[-–]\s*(20\d{2}|present|current)\)?', text.lower())
+        if duration_match:
+            return f"{duration_match.group(1)}-{duration_match.group(2)}"
+        return "Recent"
+    
+    def _extract_institution(self, text: str) -> str:
+        """Extract institution name from education line"""
+        # Look for university, college, institute
+        words = text.split()
+        for i, word in enumerate(words):
+            if word.lower() in ['university', 'college', 'institute', 'school']:
+                # Take surrounding words
+                start = max(0, i-2)
+                end = min(len(words), i+2) 
+                return ' '.join(words[start:end])
+        return "Institution"
+    
+    def _extract_year(self, text: str) -> str:
+        """Extract year from text"""
+        import re
+        year_match = re.search(r'(20\d{2})', text)
+        return year_match.group(1) if year_match else "Recent"
     
     def count_tokens(self, text: str) -> int:
         """Mock token counting"""
