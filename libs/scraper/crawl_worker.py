@@ -18,6 +18,7 @@ from libs.db.session import get_session
 from libs.db import models
 from libs.scraper.careers_discovery import CareersDiscoveryService
 from libs.scraper.anduril_adapter import AndurilScraper, JobPosting
+from libs.scraper.ats_scrapers import GreenhouseScraper, LeverScraper, WorkdayScraper
 from libs.scraper.failure_metrics import get_failure_tracker, crawl_session, company_crawl, classify_exception
 
 logger = logging.getLogger(__name__)
@@ -29,12 +30,27 @@ class CrawlWorker:
         self.discovery_service = CareersDiscoveryService()
         self.failure_tracker = get_failure_tracker()
         self._scrapers = {
-            'anduril': self._create_anduril_scraper
+            'anduril': self._create_anduril_scraper,
+            'greenhouse': self._create_greenhouse_scraper,
+            'lever': self._create_lever_scraper,
+            'workday': self._create_workday_scraper
         }
     
     def _create_anduril_scraper(self) -> AndurilScraper:
         """Create an Anduril scraper instance"""
         return AndurilScraper()
+    
+    def _create_greenhouse_scraper(self) -> GreenhouseScraper:
+        """Create a Greenhouse scraper instance"""
+        return GreenhouseScraper()
+    
+    def _create_lever_scraper(self) -> LeverScraper:
+        """Create a Lever scraper instance"""
+        return LeverScraper()
+    
+    def _create_workday_scraper(self) -> WorkdayScraper:
+        """Create a Workday scraper instance"""
+        return WorkdayScraper()
     
     def crawl_company(self, company_name: str) -> Dict[str, Any]:
         """Crawl jobs for a specific company with enhanced error tracking
@@ -84,7 +100,16 @@ class CrawlWorker:
                 try:
                     # Run the scraper
                     scraper = self._scrapers[scraper_type]()
-                    job_postings = scraper.search()
+                    
+                    # ATS scrapers need company domain, Anduril scraper doesn't
+                    if scraper_type in ['greenhouse', 'lever', 'workday']:
+                        # Extract company domain from website or use company name
+                        company_domain = self._extract_company_domain(company, careers_url)
+                        job_postings = scraper.search(company_domain)
+                    else:
+                        # Anduril and other specific scrapers
+                        job_postings = scraper.search()
+                    
                     logger.info(f"Scraped {len(job_postings)} jobs from {company.name}")
                     
                     # Ingest jobs into database
@@ -174,11 +199,78 @@ class CrawlWorker:
         """
         careers_url_lower = careers_url.lower()
         
+        # Company-specific scrapers
         if 'anduril.com' in careers_url_lower:
             return 'anduril'
         
-        # Default to generic scraper (not implemented yet)
-        return 'generic'
+        # ATS platform detection
+        if 'greenhouse.io' in careers_url_lower or 'boards.greenhouse.io' in careers_url_lower:
+            return 'greenhouse'
+        elif 'lever.co' in careers_url_lower or 'jobs.lever.co' in careers_url_lower:
+            return 'lever'
+        elif 'myworkdayjobs.com' in careers_url_lower or 'workday' in careers_url_lower:
+            return 'workday'
+        
+        # Try to detect ATS by common patterns in URL structure
+        if '/greenhouse/' in careers_url_lower or '/boards/' in careers_url_lower:
+            return 'greenhouse'
+        elif '/lever/' in careers_url_lower:
+            return 'lever'
+        elif '/workday/' in careers_url_lower or '/jobs/' in careers_url_lower:
+            return 'workday'
+        
+        # Default to greenhouse as it's quite common
+        logger.info(f"Could not determine ATS type for {careers_url}, defaulting to greenhouse")
+        return 'greenhouse'
+    
+    def _extract_company_domain(self, company: models.Company, careers_url: str) -> str:
+        """Extract company domain for ATS scrapers
+        
+        Args:
+            company: Company model instance
+            careers_url: The careers page URL
+            
+        Returns:
+            Company domain or identifier for ATS scraper
+        """
+        import re
+        
+        # First try to extract from careers URL
+        if 'greenhouse.io' in careers_url:
+            # Extract from greenhouse URL: https://boards.greenhouse.io/company-name
+            match = re.search(r'greenhouse\.io/([^/?]+)', careers_url)
+            if match:
+                return match.group(1)
+        elif 'lever.co' in careers_url:
+            # Extract from lever URL: https://jobs.lever.co/company-name
+            match = re.search(r'lever\.co/([^/?]+)', careers_url)
+            if match:
+                return match.group(1)
+        elif 'workday' in careers_url:
+            # Workday URLs are complex, return the full URL
+            return careers_url
+        
+        # If not found in careers URL, try to extract from company website
+        if company.website:
+            # Remove protocol and www
+            domain = company.website.lower()
+            domain = re.sub(r'^https?://', '', domain)
+            domain = re.sub(r'^www\.', '', domain)
+            domain = domain.split('/')[0]  # Remove path
+            
+            # For ATS, usually the company name is the domain without TLD
+            company_name = domain.split('.')[0]
+            return company_name
+        
+        # Fallback to company name (cleaned)
+        if company.name:
+            # Clean company name for URL use
+            clean_name = re.sub(r'[^a-zA-Z0-9\s]', '', company.name.lower())
+            clean_name = re.sub(r'\s+', '-', clean_name.strip())
+            return clean_name
+        
+        # Ultimate fallback
+        return "unknown-company"
     
     def _ingest_jobs(self, session, company: models.Company, job_postings: List[JobPosting]) -> tuple[int, int]:
         """Ingest job postings into the database with duplicate detection
