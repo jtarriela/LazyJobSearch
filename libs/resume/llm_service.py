@@ -8,8 +8,10 @@ import logging
 import json
 import hashlib
 import time
-from dataclasses import dataclass, asdict
+import os
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Dict, Optional, Any, Tuple
 from enum import Enum
 import asyncio
@@ -61,51 +63,264 @@ class LLMResponse:
         if self.metadata is None:
             self.metadata = {}
 
-@dataclass
-class ParsedResumeData:
-    """Structured resume data from LLM parsing"""
-    full_name: Optional[str] = None
-    email: Optional[str] = None
-    phone: Optional[str] = None
-    linkedin: Optional[str] = None
-    summary: Optional[str] = None
-    skills: List[str] = None
-    experience: List[Dict[str, Any]] = None
-    education: List[Dict[str, Any]] = None
-    certifications: List[str] = None
-    years_of_experience: Optional[float] = None
-    education_level: Optional[str] = None
+class ExperienceItem(BaseModel):
+    """Individual experience entry"""
+    title: Optional[str] = Field(None, description="Job title")
+    company: Optional[str] = Field(None, description="Company name")
+    duration: Optional[str] = Field(None, description="Employment duration")
+    description: Optional[str] = Field(None, description="Job description")
+    location: Optional[str] = Field(None, description="Job location")
+
+
+class EducationItem(BaseModel):
+    """Individual education entry"""
+    degree: Optional[str] = Field(None, description="Degree type")
+    field: Optional[str] = Field(None, description="Field of study")
+    institution: Optional[str] = Field(None, description="School/University name")
+    year: Optional[str] = Field(None, description="Graduation year")
+    gpa: Optional[str] = Field(None, description="GPA if mentioned")
+
+
+class CertificationItem(BaseModel):
+    """Individual certification entry"""
+    name: str = Field(..., description="Certification name")
+    issuer: Optional[str] = Field(None, description="Issuing organization")
+    date: Optional[str] = Field(None, description="Date obtained")
+
+
+class ProjectItem(BaseModel):
+    """Individual project entry"""
+    name: Optional[str] = Field(None, description="Project name")
+    description: Optional[str] = Field(None, description="Project description")
+    technologies: List[str] = Field(default_factory=list, description="Technologies used")
+
+
+class Links(BaseModel):
+    """Contact links and social profiles"""
+    linkedin: Optional[str] = Field(None, description="LinkedIn profile URL")
+    github: Optional[str] = Field(None, description="GitHub profile URL")
+    portfolio: Optional[str] = Field(None, description="Portfolio website URL")
+    other: List[str] = Field(default_factory=list, description="Other relevant links")
     
-    def __post_init__(self):
-        if self.skills is None:
-            self.skills = []
-        if self.experience is None:
-            self.experience = []
-        if self.education is None:
-            self.education = []
-        if self.certifications is None:
-            self.certifications = []
+    @classmethod
+    def from_dict_or_none(cls, value):
+        """Create Links from dict or return default if None"""
+        if value is None:
+            return cls()
+        if isinstance(value, dict):
+            return cls(**value)
+        return value
+
+
+class Skills(BaseModel):
+    """Categorized skills"""
+    technical: List[str] = Field(default_factory=list, description="Technical skills")
+    soft: List[str] = Field(default_factory=list, description="Soft skills")
+    languages: List[str] = Field(default_factory=list, description="Programming languages")
+    tools: List[str] = Field(default_factory=list, description="Tools and frameworks")
+    all: List[str] = Field(default_factory=list, description="All skills combined")
+
+
+class ParsedResumeData(BaseModel):
+    """Structured resume data from LLM parsing with strict validation"""
+    # Core required fields
+    full_name: Optional[str] = Field(None, description="Full name of the person")
+    email: Optional[str] = Field(None, description="Primary email address")
+    phone: Optional[str] = Field(None, description="Phone number")
+    skills: List[str] = Field(default_factory=list, description="All skills mentioned")
+    experience: List[ExperienceItem] = Field(default_factory=list, description="Work experience")
+    education: List[EducationItem] = Field(default_factory=list, description="Educational background")
+    full_text: Optional[str] = Field(None, description="Complete resume text for chunking")
     
+    # Optional fields
+    summary: Optional[str] = Field(None, description="Professional summary")
+    certifications: List[CertificationItem] = Field(default_factory=list, description="Certifications")
+    projects: List[ProjectItem] = Field(default_factory=list, description="Projects")
+    links: Links = Field(default_factory=Links, description="Links and profiles")
+    skills_structured: Skills = Field(default_factory=Skills, description="Structured skills")
+    years_of_experience: Optional[float] = Field(None, description="Calculated years of experience")
+    education_level: Optional[str] = Field(None, description="Highest education level")
+    
+    # Validation
+    @field_validator('links', mode='before')
+    @classmethod
+    def validate_links(cls, v):
+        """Ensure links is always a Links object"""
+        if v is None:
+            return Links()
+        if isinstance(v, dict):
+            return Links(**v)
+        return v
+    
+    @field_validator('skills_structured', mode='before')
+    @classmethod
+    def validate_skills_structured(cls, v):
+        """Ensure skills_structured is always a Skills object"""
+        if v is None:
+            return Skills()
+        if isinstance(v, dict):
+            return Skills(**v)
+        return v
+    @field_validator('email', mode='before')
+    @classmethod
+    def validate_email(cls, v):
+        """Basic email validation"""
+        if v and '@' not in v:
+            return None  # Invalid email, return None
+        return v
+    
+    @field_validator('phone', mode='before')
+    @classmethod
+    def validate_phone(cls, v):
+        """Basic phone validation"""
+        if v and not re.search(r'\d{3}', v):  # At least 3 digits
+            return None
+        return v
+    
+    @field_validator('skills', mode='before')
+    @classmethod
+    def validate_skills(cls, v):
+        """Ensure skills is always a list"""
+        if v is None:
+            return []
+        if isinstance(v, str):
+            return [v]
+        return v if isinstance(v, list) else []
+
     def get_missing_fields(self) -> List[str]:
         """Get list of missing required fields"""
         missing = []
         
-        if not self.full_name:
-            missing.append("full_name")
-        if not self.email:
-            missing.append("email")
-        if not self.skills:
-            missing.append("skills")
-        if not self.experience:
-            missing.append("experience")
-        if not self.education:
-            missing.append("education")
+        # Define required fields as per problem statement
+        required_fields = ["full_name", "email", "phone", "skills", "experience", "education", "full_text"]
+        
+        for field in required_fields:
+            value = getattr(self, field, None)
+            if not value or (isinstance(value, list) and len(value) == 0):
+                missing.append(field)
         
         return missing
     
     def is_complete(self) -> bool:
         """Check if all required fields are present"""
         return len(self.get_missing_fields()) == 0
+
+
+class LLMClient(BaseModel):
+    """Abstract LLM client interface"""
+    
+    async def chat(self, model: str, system: str, user: str, pdf_bytes: Optional[bytes] = None, text: Optional[str] = None) -> LLMResponse:
+        """Send chat request to LLM provider
+        
+        Args:
+            model: Model name (e.g., 'gpt-3.5-turbo', 'claude-3-sonnet')
+            system: System prompt
+            user: User prompt
+            pdf_bytes: Optional PDF file bytes (if provider supports it)
+            text: Fallback text if provider doesn't support PDF bytes
+            
+        Returns:
+            LLMResponse with content and metadata
+        """
+        raise NotImplementedError
+
+
+class LLMConfig:
+    """LLM configuration from environment variables"""
+    
+    def __init__(self):
+        # Environment configuration
+        self.provider = os.getenv('LJS_LLM_PROVIDER', 'mock').lower()
+        self.model = os.getenv('LJS_LLM_MODEL', 'gpt-3.5-turbo')
+        self.timeout = int(os.getenv('LJS_LLM_TIMEOUT', '30'))
+        self.max_tokens = int(os.getenv('LJS_LLM_MAX_TOKENS', '2000'))
+        
+        # Provider-specific configs
+        self.openai_api_key = os.getenv('OPENAI_API_KEY')
+        self.anthropic_api_key = os.getenv('ANTHROPIC_API_KEY')
+        
+        # Validate configuration
+        if self.provider not in ['mock', 'openai', 'anthropic']:
+            raise ValueError(f"Unsupported LLM provider: {self.provider}")
+            
+        if self.provider == 'openai' and not self.openai_api_key:
+            raise ValueError("OPENAI_API_KEY required for OpenAI provider")
+            
+        if self.provider == 'anthropic' and not self.anthropic_api_key:
+            raise ValueError("ANTHROPIC_API_KEY required for Anthropic provider")
+
+
+class MockLLMClient:
+    """Mock LLM client for testing"""
+    
+    def __init__(self):
+        self.request_count = 0
+    
+    async def chat(self, model: str, system: str, user: str, pdf_bytes: Optional[bytes] = None, text: Optional[str] = None) -> LLMResponse:
+        """Mock chat implementation"""
+        await asyncio.sleep(0.1)  # Simulate API delay
+        
+        # Use text or PDF bytes (preferring text for simplicity)
+        resume_text = text if text else "Mock resume content from PDF"
+        
+        # Generate mock response using existing logic
+        mock_provider = MockLLMProvider()
+        mock_request = LLMRequest(
+            prompt=f"{system}\n\n{user}",
+            model=model,
+            max_tokens=2000,
+            temperature=0.1
+        )
+        
+        return await mock_provider.generate_completion(mock_request)
+        
+class OpenAILLMClient:
+    """OpenAI LLM client implementation"""
+    
+    def __init__(self, api_key: str, timeout: int = 30):
+        self.api_key = api_key
+        self.timeout = timeout
+        
+    async def chat(self, model: str, system: str, user: str, pdf_bytes: Optional[bytes] = None, text: Optional[str] = None) -> LLMResponse:
+        """OpenAI chat implementation"""
+        # TODO: Implement OpenAI API calls
+        # For now, fallback to mock
+        mock_client = MockLLMClient()
+        return await mock_client.chat(model, system, user, pdf_bytes, text)
+
+
+class AnthropicLLMClient:
+    """Anthropic LLM client implementation"""
+    
+    def __init__(self, api_key: str, timeout: int = 30):
+        self.api_key = api_key
+        self.timeout = timeout
+        
+    async def chat(self, model: str, system: str, user: str, pdf_bytes: Optional[bytes] = None, text: Optional[str] = None) -> LLMResponse:
+        """Anthropic chat implementation"""
+        # TODO: Implement Anthropic API calls
+        # For now, fallback to mock
+        mock_client = MockLLMClient()
+        return await mock_client.chat(model, system, user, pdf_bytes, text)
+
+
+def create_llm_client(config: Optional[LLMConfig] = None) -> 'LLMClient':
+    """Factory function to create LLM client based on configuration"""
+    if config is None:
+        config = LLMConfig()
+    
+    if config.provider == 'mock':
+        return MockLLMClient()
+    elif config.provider == 'openai':
+        return OpenAILLMClient(config.openai_api_key, config.timeout)
+    elif config.provider == 'anthropic':
+        return AnthropicLLMClient(config.anthropic_api_key, config.timeout)
+    else:
+        raise ValueError(f"Unsupported provider: {config.provider}")
+
+
+# Keep compatibility with existing code
+REQUIRED_FIELDS = ["full_name", "email", "phone", "skills", "experience", "education", "full_text"]
 
 class MockLLMProvider:
     """Mock LLM provider for testing"""
@@ -274,14 +489,17 @@ class MockLLMProvider:
             "full_name": name,
             "email": email,
             "phone": phone,
-            "linkedin": f"linkedin.com/in/{name.lower().replace(' ', '').replace('.', '')}" if name and 'linkedin' in text else None,
-            "summary": summary,
             "skills": found_skills,
             "experience": experience if experience else [{"title": "Professional", "company": "Unknown", "duration": "Recent", "description": "Professional experience"}],
             "education": education if education else [{"degree": "Degree", "field": "Field", "institution": "Institution", "year": "Recent"}],
+            "full_text": resume_text,  # Add full text for chunking
+            "summary": summary,
             "certifications": certifications,
             "years_of_experience": years_exp,
-            "education_level": education_level
+            "education_level": education_level,
+            "links": {
+                "linkedin": f"linkedin.com/in/{name.lower().replace(' ', '').replace('.', '')}" if name and 'linkedin' in text else None
+            }
         }
         
         # Remove None values to test retry logic occasionally
@@ -444,7 +662,29 @@ class LLMService:
                 # Parse the JSON response
                 try:
                     data_dict = json.loads(response.content)
-                    new_parsed_data = ParsedResumeData(**data_dict)
+                    
+                    # Ensure full_text is included if missing
+                    if 'full_text' not in data_dict or not data_dict['full_text']:
+                        data_dict['full_text'] = resume_text
+                    
+                    # Create ParsedResumeData with proper error handling
+                    try:
+                        new_parsed_data = ParsedResumeData(**data_dict)
+                    except Exception as validation_error:
+                        logger.error(f"Pydantic validation failed: {validation_error}")
+                        logger.debug(f"Raw data_dict: {data_dict}")
+                        
+                        # Try to create with minimal required fields
+                        minimal_data = {
+                            'full_name': data_dict.get('full_name'),
+                            'email': data_dict.get('email'),
+                            'phone': data_dict.get('phone'),
+                            'skills': data_dict.get('skills', []),
+                            'experience': data_dict.get('experience', []),
+                            'education': data_dict.get('education', []),
+                            'full_text': resume_text
+                        }
+                        new_parsed_data = ParsedResumeData(**minimal_data)
                     
                     # Merge with existing data if this is a retry
                     if parsed_data and attempt > 0:
@@ -497,8 +737,6 @@ Extract the following information and return as valid JSON:
     "full_name": "<person's full name>",
     "email": "<email address>",
     "phone": "<phone number>",
-    "linkedin": "<LinkedIn profile URL or username>",
-    "summary": "<professional summary or objective>",
     "skills": ["<skill1>", "<skill2>", "<skill3>", ...],
     "experience": [
         {{
@@ -516,18 +754,26 @@ Extract the following information and return as valid JSON:
             "year": "<graduation year or years attended>"
         }}
     ],
+    "full_text": "{resume_text}",
+    "summary": "<professional summary or objective>",
     "certifications": ["<cert1>", "<cert2>", ...],
     "years_of_experience": <total years as a number>,
-    "education_level": "<highest education level: high_school, associates, bachelors, masters, phd>"
+    "education_level": "<highest education level: high_school, associates, bachelors, masters, phd>",
+    "links": {{
+        "linkedin": "<LinkedIn profile URL>",
+        "github": "<GitHub profile URL>",
+        "portfolio": "<Portfolio website URL>"
+    }}
 }}
 
 IMPORTANT:
-- Return ONLY the JSON object, no additional text
+- Return ONLY the JSON object, no additional text or explanation
 - If a field is not found, use null for strings/numbers or empty array [] for lists
 - Extract ALL skills mentioned, including technical and soft skills
 - Include ALL work experience entries
 - Calculate years_of_experience based on work history
-- Be thorough and accurate
+- The full_text field must contain the complete resume text for chunking purposes
+- Be thorough and accurate, no hallucination
 """
         return prompt.strip()
     
@@ -542,7 +788,7 @@ RESUME TEXT:
 MISSING FIELDS: {', '.join(missing_fields)}
 
 CURRENT EXTRACTED DATA:
-{json.dumps(asdict(current_data), indent=2, default=str)}
+{json.dumps(current_data.dict(), indent=2, default=str)}
 
 Please extract ONLY the missing fields and return them as a JSON object. Focus specifically on finding:
 {chr(10).join([f"- {field}: Look carefully in the text for this information" for field in missing_fields])}
@@ -559,8 +805,8 @@ IMPORTANT:
     def _merge_parsed_data(self, existing: ParsedResumeData, new: ParsedResumeData) -> ParsedResumeData:
         """Merge new parsed data with existing data, preferring non-empty values"""
         # Create a new instance with existing data
-        merged_dict = asdict(existing)
-        new_dict = asdict(new)
+        merged_dict = existing.dict()
+        new_dict = new.dict()
         
         for field, value in new_dict.items():
             if value and not merged_dict.get(field):  # Only update if new value exists and old one doesn't
@@ -572,6 +818,230 @@ IMPORTANT:
         
         return ParsedResumeData(**merged_dict)
 
-def create_llm_service(provider: LLMProvider = LLMProvider.MOCK, model: str = "gpt-3.5-turbo") -> LLMService:
-    """Factory function to create a configured LLM service"""
+# Factory functions for backward compatibility
+def create_llm_service(provider: LLMProvider = LLMProvider.MOCK, model: str = "gpt-3.5-turbo") -> 'LLMService':
+    """Factory function to create a configured LLM service (backward compatibility)"""
     return LLMService(provider=provider, model=model)
+
+def create_llm_resume_parser(config: Optional[LLMConfig] = None) -> 'LLMResumeParser':
+    """Factory function to create a configured LLM resume parser"""
+    return LLMResumeParser(config)
+
+
+class LLMResumeParser:
+    """Enhanced LLM-first resume parser with retry logic and client abstraction"""
+    
+    def __init__(self, config: Optional[LLMConfig] = None):
+        self.config = config or LLMConfig()
+        self.client = create_llm_client(self.config)
+        
+        # Cost tracking
+        self.total_tokens_used = 0
+        self.total_cost_cents = 0.0
+        self.requests_made = 0
+    
+    async def parse_resume(self, pdf_bytes: Optional[bytes] = None, fallback_text: Optional[str] = None, max_attempts: int = 3) -> Tuple[ParsedResumeData, List[LLMResponse]]:
+        """Parse resume using LLM with retry logic for missing fields
+        
+        Args:
+            pdf_bytes: PDF file bytes (if provider supports it)
+            fallback_text: Fallback text if provider doesn't support PDF bytes
+            max_attempts: Maximum number of parsing attempts
+            
+        Returns:
+            Tuple of (parsed_data, response_history)
+        """
+        responses = []
+        parsed_data = None
+        resume_text = fallback_text or "Resume content from PDF"
+        
+        for attempt in range(max_attempts):
+            logger.info(f"Resume parsing attempt {attempt + 1}/{max_attempts}")
+            
+            if attempt == 0:
+                # First attempt: standard parsing
+                system_prompt = self._build_system_prompt()
+                user_prompt = self._build_initial_user_prompt(resume_text)
+            else:
+                # Subsequent attempts: focused on missing fields
+                missing_fields = parsed_data.get_missing_fields() if parsed_data else []
+                if not missing_fields:
+                    break
+                system_prompt = self._build_system_prompt()
+                user_prompt = self._build_retry_user_prompt(resume_text, missing_fields, parsed_data)
+                logger.info(f"Missing fields after attempt {attempt}: {missing_fields}")
+            
+            try:
+                # Make LLM request using new client interface
+                response = await self.client.chat(
+                    model=self.config.model,
+                    system=system_prompt,
+                    user=user_prompt,
+                    pdf_bytes=pdf_bytes,
+                    text=fallback_text
+                )
+                responses.append(response)
+                
+                # Extract and parse JSON response
+                try:
+                    json_content = self._extract_json(response.content)
+                    data_dict = json.loads(json_content)
+                    
+                    # Ensure full_text is included if missing
+                    if 'full_text' not in data_dict or not data_dict['full_text']:
+                        data_dict['full_text'] = resume_text
+                    
+                    # Create ParsedResumeData with proper error handling
+                    try:
+                        new_parsed_data = ParsedResumeData(**data_dict)
+                    except Exception as validation_error:
+                        logger.error(f"Pydantic validation failed: {validation_error}")
+                        logger.debug(f"Raw data_dict: {data_dict}")
+                        
+                        # Try to create with minimal required fields
+                        minimal_data = {
+                            'full_name': data_dict.get('full_name'),
+                            'email': data_dict.get('email'),
+                            'phone': data_dict.get('phone'),
+                            'skills': data_dict.get('skills', []),
+                            'experience': data_dict.get('experience', []),
+                            'education': data_dict.get('education', []),
+                            'full_text': resume_text
+                        }
+                        new_parsed_data = ParsedResumeData(**minimal_data)
+                    
+                    # Merge with existing data if this is a retry
+                    if parsed_data and attempt > 0:
+                        parsed_data = self._merge_parsed_data(parsed_data, new_parsed_data)
+                    else:
+                        parsed_data = new_parsed_data
+                    
+                    # Update cost tracking
+                    self.total_tokens_used += response.tokens_used
+                    self.total_cost_cents += response.cost_cents
+                    self.requests_made += 1
+                    
+                    # Check if we have all required fields
+                    if parsed_data.is_complete():
+                        logger.info(f"Resume parsing completed successfully on attempt {attempt + 1}")
+                        break
+                    else:
+                        missing = parsed_data.get_missing_fields()
+                        logger.warning(f"Missing fields after attempt {attempt + 1}: {missing}")
+                        
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse LLM response as JSON: {e}")
+                    logger.debug(f"Raw response: {response.content}")
+                    if attempt == max_attempts - 1:
+                        # Last attempt failed, return what we have
+                        if parsed_data is None:
+                            parsed_data = ParsedResumeData(full_text=resume_text)
+                
+            except Exception as e:
+                logger.error(f"LLM request failed on attempt {attempt + 1}: {e}")
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(0.5 * (2 ** attempt))  # Exponential backoff
+                else:
+                    # Return empty data on final failure
+                    if parsed_data is None:
+                        parsed_data = ParsedResumeData(full_text=resume_text)
+        
+        return parsed_data, responses
+    
+    def _build_system_prompt(self) -> str:
+        """Build system prompt for LLM"""
+        return """You are an expert resume parser. Your task is to extract structured information from resume text and return it as valid JSON.
+
+Rules:
+- Return ONLY a single JSON object, no additional text or explanation
+- If a field is not found, use null for strings/numbers or empty array [] for lists  
+- Do not hallucinate information that is not present
+- Extract ALL skills mentioned, including technical and soft skills
+- Include ALL work experience and education entries
+- Be thorough and accurate"""
+    
+    def _build_initial_user_prompt(self, resume_text: str) -> str:
+        """Build initial user prompt for resume parsing"""
+        return f"""Extract information from this resume and return as JSON with these exact fields:
+
+{resume_text}
+
+Return JSON with this structure:
+{{
+    "full_name": "<person's full name>",
+    "email": "<email address>", 
+    "phone": "<phone number>",
+    "skills": ["<skill1>", "<skill2>", ...],
+    "experience": [{{"title": "<job title>", "company": "<company>", "duration": "<dates>", "description": "<description>"}}],
+    "education": [{{"degree": "<degree>", "field": "<field>", "institution": "<school>", "year": "<year>"}}],
+    "full_text": "{resume_text}",
+    "summary": "<professional summary>",
+    "certifications": ["<cert1>", "<cert2>", ...],
+    "years_of_experience": <number>,
+    "education_level": "<level>",
+    "links": {{"linkedin": "<url>", "github": "<url>", "portfolio": "<url>"}}
+}}"""
+    
+    def _build_retry_user_prompt(self, resume_text: str, missing_fields: List[str], current_data: ParsedResumeData) -> str:
+        """Build retry prompt for missing fields"""
+        return f"""I previously parsed this resume but some fields were missing. Please focus on extracting the missing information.
+
+Resume:
+{resume_text}
+
+Missing fields: {', '.join(missing_fields)}
+
+Current data:
+{json.dumps(current_data.dict(), indent=2, default=str)}
+
+Please return a JSON object with ONLY the missing fields filled in. Focus specifically on finding:
+{chr(10).join([f"- {field}: Look carefully in the text for this information" for field in missing_fields])}
+
+Return only the JSON object with the missing fields."""
+    
+    def _extract_json(self, text: str) -> str:
+        """Extract JSON from LLM response that may contain extra text"""
+        # Find the first complete JSON object in the response
+        text = text.strip()
+        
+        # If it already looks like pure JSON, return as is
+        if text.startswith('{') and text.endswith('}'):
+            return text
+            
+        # Look for JSON object within the text
+        start_idx = text.find('{')
+        if start_idx == -1:
+            raise ValueError("No JSON object found in response")
+        
+        # Find the matching closing brace
+        brace_count = 0
+        end_idx = start_idx
+        
+        for i in range(start_idx, len(text)):
+            if text[i] == '{':
+                brace_count += 1
+            elif text[i] == '}':
+                brace_count -= 1
+                if brace_count == 0:
+                    end_idx = i + 1
+                    break
+        
+        if brace_count != 0:
+            raise ValueError("Incomplete JSON object in response")
+            
+        return text[start_idx:end_idx]
+    
+    def _merge_parsed_data(self, existing: ParsedResumeData, new: ParsedResumeData) -> ParsedResumeData:
+        """Merge new parsed data with existing data, preferring non-empty values"""
+        merged_dict = existing.dict()
+        new_dict = new.dict()
+        
+        for field, value in new_dict.items():
+            if value and not merged_dict.get(field):  # Only update if new value exists and old one doesn't
+                merged_dict[field] = value
+            elif isinstance(value, list) and value:  # For lists, extend if new has more items
+                existing_list = merged_dict.get(field, [])
+                if len(value) > len(existing_list):
+                    merged_dict[field] = value
+        
+        return ParsedResumeData(**merged_dict)

@@ -268,6 +268,12 @@ class ResumeParser:
         # Get structured data from LLM
         llm_data, responses = await self.llm_service.parse_resume(text)
         
+        # Ensure we have valid data
+        if llm_data is None:
+            logger.error("LLM service returned None, creating empty ParsedResumeData")
+            from libs.resume.llm_service import ParsedResumeData
+            llm_data = ParsedResumeData()
+        
         # Also extract sections using regex for backward compatibility
         sections = self._extract_sections(text)
         
@@ -277,8 +283,8 @@ class ResumeParser:
             contact_info['email'] = llm_data.email
         if llm_data.phone:
             contact_info['phone'] = llm_data.phone
-        if llm_data.linkedin:
-            contact_info['linkedin'] = llm_data.linkedin
+        if hasattr(llm_data.links, 'linkedin') and llm_data.links.linkedin:
+            contact_info['linkedin'] = llm_data.links.linkedin
         
         # Convert experience list to simple format if needed
         experience_list = []
