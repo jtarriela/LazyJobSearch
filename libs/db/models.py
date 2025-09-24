@@ -7,7 +7,7 @@ Future: Split into modules, add indexes, constraints, relationships.
 """
 from __future__ import annotations
 from sqlalchemy import (
-    Column, String, Text, Integer, Float, Boolean, ForeignKey, DateTime, JSON, LargeBinary
+    Column, String, Text, Integer, Float, Boolean, ForeignKey, DateTime, JSON, LargeBinary, UniqueConstraint, CheckConstraint
 )
 from sqlalchemy.dialects.postgresql import UUID, TSVECTOR, JSONB, ARRAY
 from pgvector.sqlalchemy import Vector
@@ -42,7 +42,7 @@ class Job(Base):
     __tablename__ = "jobs"
     id = uuid_pk()
     company_id = Column(UUID(as_uuid=True), ForeignKey('companies.id'), nullable=False)
-    url = Column(Text, nullable=False, unique=True)
+    url = Column(Text, nullable=False, unique=True, index=True)  # Added index for frequent queries
     title = Column(Text)
     location = Column(Text)
     seniority = Column(Text)
@@ -50,7 +50,7 @@ class Job(Base):
     jd_tsv = Column(TSVECTOR)  # Automatically managed by trigger
     jd_file_url = Column(Text)
     jd_skills_csv = Column(Text)
-    scraped_at = Column(DateTime)
+    scraped_at = Column(DateTime, index=True)  # Added index for frequent queries by date
     scrape_fingerprint = Column(Text)
 
 class JobChunk(Base):
@@ -68,13 +68,23 @@ class Resume(Base):
     __tablename__ = "resumes"
     id = uuid_pk()
     fulltext = Column(Text)
-    sections_json = Column(Text)
+    sections_json = Column(JSONB)  # Changed to JSONB for better performance
     skills_csv = Column(Text)
     yoe_raw = Column(Float)
     yoe_adjusted = Column(Float)
     edu_level = Column(Text)
     file_url = Column(Text)
     created_at = Column(DateTime)
+    # Added columns to match documentation
+    version = Column(Integer, default=1)
+    parent_resume_id = Column(UUID(as_uuid=True), ForeignKey('resumes.id'))
+    metadata_tags = Column(ARRAY(Text))  # Added for user-provided tags
+    description = Column(Text)  # Added for user summary
+    active = Column(Boolean, default=True)  # Added for active status
+    source_review_id = Column(UUID(as_uuid=True), ForeignKey('reviews.id'))  # Added for review tracking
+    iteration_index = Column(Integer)  # Added to mirror review iteration
+    # Added for deduplication - content hash for exact matches
+    content_hash = Column(Text, unique=True, index=True)  # SHA256 hash of normalized content
 
 class ResumeChunk(Base):
     __tablename__ = "resume_chunks"
@@ -113,15 +123,27 @@ class MatchOutcome(Base):
 
 class Review(Base):
     __tablename__ = "reviews"
+    __table_args__ = (
+        CheckConstraint("status IN ('pending', 'completed', 'superseded', 'cancelled')", name='ck_review_status'),
+        CheckConstraint("satisfaction IN ('NEEDS_MORE', 'SATISFIED') OR satisfaction IS NULL", name='ck_review_satisfaction'),
+    )
     id = uuid_pk()
     resume_id = Column(UUID(as_uuid=True), ForeignKey('resumes.id'), nullable=False)
     job_id = Column(UUID(as_uuid=True), ForeignKey('jobs.id'), nullable=False)
+    # Added to match documentation
+    iteration = Column(Integer, default=1)  # Added iteration number
+    parent_review_id = Column(UUID(as_uuid=True), ForeignKey('reviews.id'))
     llm_score = Column(Integer)
     strengths_md = Column(Text)
     weaknesses_md = Column(Text)
-    suggestions_md = Column(Text)
+    suggestions_md = Column(Text)  # Keeping from existing model
+    # Added columns to match documentation
+    improvement_plan_json = Column(JSONB)  # Added structured directives
+    proposed_new_resume_id = Column(UUID(as_uuid=True), ForeignKey('resumes.id'))  # Added AI-generated candidate
+    accepted_new_resume_id = Column(UUID(as_uuid=True), ForeignKey('resumes.id'))  # Added adopted version
+    satisfaction = Column(Text)  # Added satisfaction tracking
+    # Keep existing fields
     iteration_count = Column(Integer, default=0)
-    parent_review_id = Column(UUID(as_uuid=True), ForeignKey('reviews.id'))
     status = Column(Text, default='pending')
     improvement_brief = Column(Text)  # Kept from existing model
     redact_note = Column(Text)  # Kept from existing model  
@@ -143,6 +165,10 @@ class ApplicationProfile(Base):
 
 class Application(Base):
     __tablename__ = "applications"
+    __table_args__ = (
+        UniqueConstraint('job_id', 'application_profile_id', name='uq_application_job_profile'),
+        CheckConstraint("status IN ('pending', 'submitted', 'rejected', 'accepted', 'withdrawn')", name='ck_application_status'),
+    )
     id = uuid_pk()
     job_id = Column(UUID(as_uuid=True), ForeignKey('jobs.id'), nullable=False)
     application_profile_id = Column(UUID(as_uuid=True), ForeignKey('application_profiles.id'), nullable=False)
@@ -188,25 +214,35 @@ class Portal(Base):
     __tablename__ = "portals"
     id = uuid_pk()
     name = Column(Text)
-    portal_type = Column(Text)
+    kind = Column(Text)  # Added to match documentation (Greenhouse | Lever | Workday | ...)
+    created_at = Column(DateTime)  # Added to match documentation
+    portal_type = Column(Text)  # Keep existing field
 
 class PortalTemplate(Base):
     __tablename__ = "portal_templates"
     id = uuid_pk()
-    portal_id = Column(UUID(as_uuid=True), nullable=False)
-    template_json = Column(Text)
+    portal_id = Column(UUID(as_uuid=True), ForeignKey('portals.id'), nullable=False)
+    template_name = Column(Text)  # Added to match documentation
+    template_json = Column(JSONB)  # Changed to JSONB for better performance
+    version = Column(Integer)  # Added to match documentation
+    created_at = Column(DateTime)  # Added to match documentation
 
 class CompanyPortalConfig(Base):
     __tablename__ = "company_portal_configs"
     id = uuid_pk()
-    company_id = Column(UUID(as_uuid=True), nullable=False)
-    portal_id = Column(UUID(as_uuid=True), nullable=False)
-    config_json = Column(Text)
+    company_id = Column(UUID(as_uuid=True), ForeignKey('companies.id'), nullable=False)
+    portal_id = Column(UUID(as_uuid=True), ForeignKey('portals.id'), nullable=False)
+    config_json = Column(JSONB)  # Changed to JSONB for better performance
+    active = Column(Boolean, default=True)  # Added to match documentation
+    created_at = Column(DateTime)  # Added to match documentation
 
 class PortalFieldDictionary(Base):
     __tablename__ = "portal_field_dictionary"
     id = uuid_pk()
-    key = Column(Text, nullable=False, unique=True)
+    field_key = Column(Text, nullable=False, unique=True)  # Added to match documentation
+    label = Column(Text)  # Added to match documentation
+    data_type = Column(Text)  # Added to match documentation
+    key = Column(Text, nullable=False, unique=True)  # Keep existing field
     description = Column(Text)
     required = Column(Boolean, default=False)
     pii_level = Column(Integer, default=0)

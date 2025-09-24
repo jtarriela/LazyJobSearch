@@ -18,3 +18,4 @@
 | active | bool | Active default? |
 | source_review_id | uuid nullable | Review that generated this version |
 | iteration_index | int nullable | Mirrors review iteration |
+| content_hash | text unique | SHA256 hash for deduplication |
