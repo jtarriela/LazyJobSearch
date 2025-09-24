@@ -22,6 +22,48 @@ class ReviewStatus(Enum):
     ACCEPTED = "accepted"
     REJECTED = "rejected"
 
+# Valid state transitions for review workflow
+VALID_TRANSITIONS = {
+    ReviewStatus.PENDING: [ReviewStatus.IN_PROGRESS, ReviewStatus.REJECTED],
+    ReviewStatus.IN_PROGRESS: [ReviewStatus.COMPLETED, ReviewStatus.ACCEPTED, ReviewStatus.REJECTED],
+    ReviewStatus.COMPLETED: [ReviewStatus.ACCEPTED, ReviewStatus.REJECTED],
+    ReviewStatus.ACCEPTED: [],  # Terminal state
+    ReviewStatus.REJECTED: []   # Terminal state
+}
+
+def validate_status_transition(current_status: str, new_status: str) -> bool:
+    """Validate if a status transition is allowed.
+    
+    Args:
+        current_status: Current status string
+        new_status: Desired new status string
+        
+    Returns:
+        True if transition is valid, False otherwise
+    """
+    try:
+        current = ReviewStatus(current_status)
+        new = ReviewStatus(new_status)
+        return new in VALID_TRANSITIONS.get(current, [])
+    except ValueError:
+        # Invalid status values
+        return False
+
+def get_valid_next_states(current_status: str) -> List[str]:
+    """Get list of valid next states for the current status.
+    
+    Args:
+        current_status: Current status string
+        
+    Returns:
+        List of valid next status strings
+    """
+    try:
+        current = ReviewStatus(current_status)
+        return [status.value for status in VALID_TRANSITIONS.get(current, [])]
+    except ValueError:
+        return []
+
 @dataclass
 class ReviewCritique:
     """LLM critique of a resume"""
