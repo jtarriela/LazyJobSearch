@@ -130,7 +130,8 @@ class Context:
         self.dry_run: bool = True
         self.logger: Logger | None = None
 
-pass_context = typer.ContextVar("ljs_ctx")
+import contextvars
+pass_context = contextvars.ContextVar("ljs_ctx")
 
 
 @APP.callback()
