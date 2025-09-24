@@ -7,9 +7,10 @@ Future: Split into modules, add indexes, constraints, relationships.
 """
 from __future__ import annotations
 from sqlalchemy import (
-    Column, String, Text, Integer, Float, Boolean, ForeignKey, DateTime, JSON
+    Column, String, Text, Integer, Float, Boolean, ForeignKey, DateTime, JSON, LargeBinary
 )
-from sqlalchemy.dialects.postgresql import UUID, TSVECTOR
+from sqlalchemy.dialects.postgresql import UUID, TSVECTOR, JSONB, ARRAY
+from pgvector.sqlalchemy import Vector
 from sqlalchemy.orm import declarative_base
 import uuid
 
@@ -18,16 +19,25 @@ Base = declarative_base()
 def uuid_pk():
     return Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
+# Missing Company model that's referenced by migrations
+class Company(Base):
+    __tablename__ = "companies"
+    id = uuid_pk()
+    name = Column(Text)
+    website = Column(Text)
+    careers_url = Column(Text)
+    crawler_profile_json = Column(Text)
+
 class Job(Base):
     __tablename__ = "jobs"
     id = uuid_pk()
-    company_id = Column(UUID(as_uuid=True), nullable=False)
+    company_id = Column(UUID(as_uuid=True), ForeignKey('companies.id'), nullable=False)
     url = Column(Text, nullable=False, unique=True)
     title = Column(Text)
     location = Column(Text)
     seniority = Column(Text)
     jd_fulltext = Column(Text)
-    jd_tsv = Column(TSVECTOR)
+    jd_tsv = Column(TSVECTOR)  # Automatically managed by trigger
     jd_file_url = Column(Text)
     jd_skills_csv = Column(Text)
     scraped_at = Column(DateTime)
@@ -36,9 +46,9 @@ class Job(Base):
 class JobChunk(Base):
     __tablename__ = "job_chunks"
     id = uuid_pk()
-    job_id = Column(UUID(as_uuid=True), nullable=False)
+    job_id = Column(UUID(as_uuid=True), ForeignKey('jobs.id', ondelete='CASCADE'), nullable=False)
     chunk_text = Column(Text)
-    # embedding vector omitted placeholder
+    embedding = Column(Vector)  # pgvector column
     token_count = Column(Integer)
     embedding_version = Column(Text)
     embedding_model = Column(Text)
@@ -59,8 +69,9 @@ class Resume(Base):
 class ResumeChunk(Base):
     __tablename__ = "resume_chunks"
     id = uuid_pk()
-    resume_id = Column(UUID(as_uuid=True), nullable=False)
+    resume_id = Column(UUID(as_uuid=True), ForeignKey('resumes.id', ondelete='CASCADE'), nullable=False)
     chunk_text = Column(Text)
+    embedding = Column(Vector)  # pgvector column
     token_count = Column(Integer)
     embedding_version = Column(Text)
     embedding_model = Column(Text)
@@ -69,8 +80,8 @@ class ResumeChunk(Base):
 class Match(Base):
     __tablename__ = "matches"
     id = uuid_pk()
-    job_id = Column(UUID(as_uuid=True), nullable=False)
-    resume_id = Column(UUID(as_uuid=True), nullable=False)
+    job_id = Column(UUID(as_uuid=True), ForeignKey('jobs.id'), nullable=False)
+    resume_id = Column(UUID(as_uuid=True), ForeignKey('resumes.id'), nullable=False)
     vector_score = Column(Float)
     llm_score = Column(Integer)
     action = Column(Text)
@@ -82,7 +93,7 @@ class Match(Base):
 class MatchOutcome(Base):
     __tablename__ = "match_outcomes"
     id = uuid_pk()
-    match_id = Column(UUID(as_uuid=True), nullable=False)
+    match_id = Column(UUID(as_uuid=True), ForeignKey('matches.id'), nullable=False)
     got_response = Column(Boolean)
     response_time_hours = Column(Integer)
     got_interview = Column(Boolean)
@@ -93,33 +104,47 @@ class MatchOutcome(Base):
 class Review(Base):
     __tablename__ = "reviews"
     id = uuid_pk()
-    resume_id = Column(UUID(as_uuid=True), nullable=False)
-    job_id = Column(UUID(as_uuid=True), nullable=False)
+    resume_id = Column(UUID(as_uuid=True), ForeignKey('resumes.id'), nullable=False)
+    job_id = Column(UUID(as_uuid=True), ForeignKey('jobs.id'), nullable=False)
     llm_score = Column(Integer)
     strengths_md = Column(Text)
     weaknesses_md = Column(Text)
-    improvement_brief = Column(Text)
-    redact_note = Column(Text)
+    suggestions_md = Column(Text)
+    iteration_count = Column(Integer, default=0)
+    parent_review_id = Column(UUID(as_uuid=True), ForeignKey('reviews.id'))
+    status = Column(Text, default='pending')
+    improvement_brief = Column(Text)  # Kept from existing model
+    redact_note = Column(Text)  # Kept from existing model  
     created_at = Column(DateTime)
 
 class ApplicationProfile(Base):
     __tablename__ = "application_profiles"
     id = uuid_pk()
-    user_id = Column(UUID(as_uuid=True), nullable=False)
-    profile_name = Column(Text)
-    answers_json = Column(Text)  # store as JSON text for now
-    files_map_json = Column(Text)
-    default_profile = Column(Boolean)
+    user_id = Column(UUID(as_uuid=True))  # FK to users when available
+    name = Column(Text, nullable=False)
+    answers_json = Column(JSONB)  # JSONB for better performance
+    resume_id = Column(UUID(as_uuid=True), ForeignKey('resumes.id'))
+    is_default = Column(Boolean, default=False)
+    profile_name = Column(Text)  # Kept from existing model
+    files_map_json = Column(Text)  # Kept from existing model
+    default_profile = Column(Boolean)  # Kept from existing model
+    created_at = Column(DateTime)
     updated_at = Column(DateTime)
 
 class Application(Base):
     __tablename__ = "applications"
     id = uuid_pk()
-    user_id = Column(UUID(as_uuid=True), nullable=False)
-    job_id = Column(UUID(as_uuid=True), nullable=False)
-    resume_id = Column(UUID(as_uuid=True), nullable=False)
-    application_profile_id = Column(UUID(as_uuid=True))
-    status = Column(Text)
+    job_id = Column(UUID(as_uuid=True), ForeignKey('jobs.id'), nullable=False)
+    application_profile_id = Column(UUID(as_uuid=True), ForeignKey('application_profiles.id'), nullable=False)
+    portal_id = Column(UUID(as_uuid=True), ForeignKey('portals.id'))
+    status = Column(Text, default='pending')
+    external_id = Column(Text)  # Portal's application ID
+    applied_at = Column(DateTime)
+    last_status_check = Column(DateTime)
+    metadata_json = Column(JSONB)
+    # Kept from existing model
+    user_id = Column(UUID(as_uuid=True))
+    resume_id = Column(UUID(as_uuid=True))
     portal = Column(Text)
     submitted_at = Column(DateTime)
     receipt_url = Column(Text)
@@ -128,7 +153,11 @@ class Application(Base):
 class ApplicationEvent(Base):
     __tablename__ = "application_events"
     id = uuid_pk()
-    application_id = Column(UUID(as_uuid=True), nullable=False)
+    application_id = Column(UUID(as_uuid=True), ForeignKey('applications.id'), nullable=False)
+    at = Column(DateTime)  # Column name from migration
+    kind = Column(Text, nullable=False)  # Column name from migration
+    detail_json = Column(JSON)  # Column name from migration
+    # Kept from existing model
     event_type = Column(Text)
     payload_json = Column(Text)
     occurred_at = Column(DateTime)
@@ -136,7 +165,12 @@ class ApplicationEvent(Base):
 class ApplicationArtifact(Base):
     __tablename__ = "application_artifacts"
     id = uuid_pk()
-    application_id = Column(UUID(as_uuid=True), nullable=False)
+    application_id = Column(UUID(as_uuid=True), ForeignKey('applications.id'), nullable=False)
+    type = Column(Text, nullable=False)  # Column name from migration
+    url = Column(Text, nullable=False)  # Column name from migration
+    sha256 = Column(Text)  # Column name from migration
+    created_at = Column(DateTime)  # Column name from migration
+    # Kept from existing model
     kind = Column(Text)
     file_url = Column(Text)
 
@@ -162,17 +196,13 @@ class CompanyPortalConfig(Base):
 class PortalFieldDictionary(Base):
     __tablename__ = "portal_field_dictionary"
     id = uuid_pk()
-    canonical_name = Column(Text)
-    field_type = Column(Text)
+    key = Column(Text, nullable=False, unique=True)
     description = Column(Text)
+    required = Column(Boolean, default=False)
+    pii_level = Column(Integer, default=0)
+    created_at = Column(DateTime)
 
-class Company(Base):
-    __tablename__ = "companies"
-    id = uuid_pk()
-    name = Column(Text)
-    website = Column(Text)
-    careers_url = Column(Text)
-    crawler_profile_json = Column(Text)
+# Models from migration 0003 that were missing
 
 class EmbeddingVersion(Base):
     __tablename__ = "embedding_versions"
@@ -181,23 +211,41 @@ class EmbeddingVersion(Base):
     dimensions = Column(Integer, nullable=False)
     created_at = Column(DateTime)
     deprecated_at = Column(DateTime)
-    # store array as JSON text if ARRAY not configured yet
-    compatible_with = Column(Text)  # comma-separated list for simplicity
+    compatible_with = Column(ARRAY(Text))
 
-class MatchingFeatureWeights(Base):
+class MatchingFeatureWeight(Base):
     __tablename__ = "matching_feature_weights"
     id = uuid_pk()
     created_at = Column(DateTime)
     model_version = Column(Text)
-    weights_json = Column(Text)  # JSON serialized
+    weights_json = Column(JSONB, nullable=False)
 
 class ScrapeSession(Base):
     __tablename__ = "scrape_sessions"
     id = uuid_pk()
-    company_id = Column(UUID(as_uuid=True))
+    company_id = Column(UUID(as_uuid=True), ForeignKey('companies.id'))
     started_at = Column(DateTime)
     finished_at = Column(DateTime)
-    profile_json = Column(Text)
+    profile_json = Column(JSONB)
     proxy_identifier = Column(Text)
     outcome = Column(Text)
-    metrics_json = Column(Text)
+    metrics_json = Column(JSONB)
+
+class UserCredential(Base):
+    __tablename__ = "user_credentials"
+    id = uuid_pk()
+    user_id = Column(UUID(as_uuid=True))
+    portal_family = Column(Text, nullable=False)
+    username = Column(Text, nullable=False)
+    password_ciphertext = Column(LargeBinary)
+    totp_secret_ciphertext = Column(LargeBinary)
+    updated_at = Column(DateTime)
+
+class Session(Base):
+    __tablename__ = "sessions"
+    id = uuid_pk()
+    user_id = Column(UUID(as_uuid=True))
+    portal_family = Column(Text, nullable=False)
+    cookie_jar = Column(JSON, nullable=False)
+    expires_at = Column(DateTime)
+    created_at = Column(DateTime)
