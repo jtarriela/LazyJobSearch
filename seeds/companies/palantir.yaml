@@ -1,0 +1,10 @@
+company: palantir
+careers_url: https://www.palantir.com/careers/
+portal: greenhouse
+keywords:
+- software
+- engineer
+selectors:
+  job_link: a.job_link
+  pagination_next: a.next
+rate_limit_ppm: 5

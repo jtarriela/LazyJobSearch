@@ -1,0 +1,172 @@
+{
+  "meta": {
+    "python": "3.12.11",
+    "platform": "Linux-5.15.0-153-generic-x86_64-with-glibc2.41",
+    "hostname": "359f9251516b",
+    "git_commit": null,
+    "meminfo": {
+      "MemTotal": "65741348 kB",
+      "MemFree": "46211808 kB",
+      "MemAvailable": "52169196 kB"
+    },
+    "dry_run_env": null,
+    "time_utc": "2025-09-24T16:11:55.389258Z"
+  },
+  "aggregate": {
+    "steps": 9,
+    "successes": 7,
+    "failures": 2,
+    "required_failures": 0,
+    "total_time_s": 81.652
+  },
+  "results": [
+    {
+      "name": "config_init",
+      "skipped": true,
+      "reason": "precondition indicates already satisfied",
+      "duration_s": 0.0
+    },
+    {
+      "name": "config_show",
+      "cmd": [
+        "ljs",
+        "config",
+        "show"
+      ],
+      "returncode": 0,
+      "success": true,
+      "required": false,
+      "duration_s": 0.421,
+      "stdout": "                                                     Effective Configuration                                                     \n\u250f\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2533\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2513\n\u2503 Key                                                    \u2503 Value                                                                \u2503\n\u2521\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2547\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2529\n\u2502 matching.vector_top_k                                  \u2502 50                                                                   \u2502\n\u2502 matching.llm_top_k                                     \u2502 12                                                                   \u2502\n\u2502 matching.fts_query_expansion                           \u2502 simple                                                               \u2502\n\u2502 matching.llm_model                                     \u2502 gpt-4o-mini                                                          \u2502\n\u2502 apply.dry_run                                          \u2502 True                                                                 \u2502\n\u2502 apply.enabled_portals                                  \u2502 [\"greenhouse\", \"lever\"]                                              \u2502\n\u2502 apply.evidence_capture                                 \u2502 True                                                                 \u2502\n\u2502 user.email                                             \u2502 user@example.com                                                     \u2502\n\u2502 user.full_name                                         \u2502 Example User                                                         \u2502\n\u2502 user.preferences.locations                             \u2502 [\"Remote\", \"New York\", \"SF Bay Area\"]                                \u2502\n\u2502 user.preferences.include_keywords                      \u2502 [\"python\", \"llm\", \"retrieval\", \"postgres\"]                           \u2502\n\u2502 user.preferences.exclude_keywords                      \u2502 [\"unpaid\", \"internship\"]                                             \u2502\n\u2502 user.iteration.max_iterations_per_job                  \u2502 3                                                                    \u2502\n\u2502 user.iteration.auto_request_next_if_score_improves_pct \u2502 15                                                                   \u2502\n\u2502 application_profiles                                   \u2502 [{\"name\": \"default\", \"answers\": {\"work_auth_status\": \"US Citizen\",   \u2502\n\u2502                                                        \u2502 \"relocation\": \"Yes\", \"salary_expectation\": \"Open to market range\"},  \u2502\n\u2502                                                        \u2502 \"files\": {\"resume\": \"./resumes/current.pdf\", \"cover_letter\":         \u2502\n\u2502                                                        \u2502 \"./resumes/cover_letter.md\"}, \"default\": true}]                      \u2502\n\u2502 crawl.companies_seed_file                              \u2502 ./seeds/companies.txt                                                \u2502\n\u2502 crawl.per_domain_rate_limit_ppm                        \u2502 5                                                                    \u2502\n\u2502 crawl.user_agent_rotation                              \u2502 True                                                                 \u2502\n\u2502 logging.level                                          \u2502 INFO                                                                 \u2502\n\u2502 logging.json                                           \u2502 True                                                                 \u2502\n\u2502 logging.file                                           \u2502 ./logs/lazyjobsearch.log                                             \u2502\n\u2502 db_url                                                 \u2502 postgresql+psycopg2://postgres:postgres@postgres:5432/lazyjobsearch  \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n",
+      "stderr": "",
+      "description": "Show loaded configuration"
+    },
+    {
+      "name": "create_seed_file",
+      "cmd": [
+        "bash",
+        "-lc",
+        "mkdir -p seeds && printf 'Anduril\\nPalantir\\nOpenAI\\n' > seeds/companies.txt"
+      ],
+      "returncode": 0,
+      "success": true,
+      "required": true,
+      "duration_s": 0.004,
+      "stdout": "",
+      "stderr": "",
+      "description": "Create seed companies.txt"
+    },
+    {
+      "name": "companies_seed",
+      "cmd": [
+        "ljs",
+        "companies",
+        "seed",
+        "seeds/companies.txt"
+      ],
+      "returncode": 0,
+      "success": true,
+      "required": true,
+      "duration_s": 0.557,
+      "stdout": "Starting company seeding from: seeds/companies.txt\nDRY RUN: Company seeding simulation\n",
+      "stderr": "",
+      "description": "Seed companies from file"
+    },
+    {
+      "name": "companies_list",
+      "cmd": [
+        "ljs",
+        "companies",
+        "list"
+      ],
+      "returncode": 0,
+      "success": true,
+      "required": true,
+      "duration_s": 0.57,
+      "stdout": "No company seeds found.\nUse 'ljs companies add <name> --auto' to add companies.\n",
+      "stderr": "",
+      "description": "List companies after seeding"
+    },
+    {
+      "name": "generate_company_template",
+      "cmd": [
+        "ljs",
+        "generate",
+        "company-template",
+        "exampleco",
+        "--careers-url",
+        "https://example.com/careers"
+      ],
+      "returncode": 0,
+      "success": true,
+      "required": false,
+      "duration_s": 0.419,
+      "stdout": "File exists: seeds/companies/exampleco.yaml (will not overwrite)\n",
+      "stderr": "",
+      "description": "Scaffold company template YAML"
+    },
+    {
+      "name": "companies_add_auto",
+      "cmd": [
+        "ljs",
+        "companies",
+        "add",
+        "Example AutoCo",
+        "--auto"
+      ],
+      "returncode": 1,
+      "success": false,
+      "required": false,
+      "duration_s": 78.528,
+      "stdout": "Starting auto-discovery for company: Example AutoCo\nDomain will be auto-resolved\n\u274c Failed to create company seed: Failed to discover company configuration: Could not resolve domain for company: Example AutoCo\nError during company auto-discovery: 1\n",
+      "stderr": "2025-09-24 16:11:57,850 INFO libs.companies.auto_discovery Creating company seed for Example AutoCo (dry_run=True)\n2025-09-24 16:11:57,850 INFO libs.companies.auto_discovery Starting auto-discovery for company: Example AutoCo\n2025-09-24 16:11:57,850 INFO libs.companies.auto_discovery Resolving company domain...\n2025-09-24 16:11:57,850 INFO libs.companies.domain_resolver Resolving domain for company: Example AutoCo\n2025-09-24 16:11:57,982 WARNING urllib3.connectionpool Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPSConnection object at 0x7fa0ff5a7b60>: Failed to resolve 'example-autoco.com' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:00,089 WARNING urllib3.connectionpool Retrying (Retry(total=1, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPSConnection object at 0x7fa13e759b50>: Failed to resolve 'example-autoco.com' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:04,216 WARNING urllib3.connectionpool Retrying (Retry(total=0, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPSConnection object at 0x7fa0ff5d84d0>: Failed to resolve 'example-autoco.com' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:04,483 WARNING urllib3.connectionpool Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPConnection object at 0x7fa0ff5d97f0>: Failed to resolve 'example-autoco.com' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:06,604 WARNING urllib3.connectionpool Retrying (Retry(total=1, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPConnection object at 0x7fa13f7c2900>: Failed to resolve 'example-autoco.com' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:10,712 WARNING urllib3.connectionpool Retrying (Retry(total=0, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPConnection object at 0x7fa0ff5a7b60>: Failed to resolve 'example-autoco.com' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:10,957 WARNING urllib3.connectionpool Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPSConnection object at 0x7fa0ff5d9520>: Failed to resolve 'exampleautoco.com' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:13,088 WARNING urllib3.connectionpool Retrying (Retry(total=1, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPSConnection object at 0x7fa0ff5d9df0>: Failed to resolve 'exampleautoco.com' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:17,212 WARNING urllib3.connectionpool Retrying (Retry(total=0, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPSConnection object at 0x7fa0ff5d9fa0>: Failed to resolve 'exampleautoco.com' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:17,447 WARNING urllib3.connectionpool Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPConnection object at 0x7fa0ff5da540>: Failed to resolve 'exampleautoco.com' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:19,597 WARNING urllib3.connectionpool Retrying (Retry(total=1, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPConnection object at 0x7fa0ff5da870>: Failed to resolve 'exampleautoco.com' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:23,752 WARNING urllib3.connectionpool Retrying (Retry(total=0, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPConnection object at 0x7fa0ff5db800>: Failed to resolve 'exampleautoco.com' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:24,002 WARNING urllib3.connectionpool Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPSConnection object at 0x7fa0ff5db1d0>: Failed to resolve 'example-autoco.io' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:26,127 WARNING urllib3.connectionpool Retrying (Retry(total=1, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPSConnection object at 0x7fa0ff5db3e0>: Failed to resolve 'example-autoco.io' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:30,243 WARNING urllib3.connectionpool Retrying (Retry(total=0, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPSConnection object at 0x7fa0ff5db620>: Failed to resolve 'example-autoco.io' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:30,489 WARNING urllib3.connectionpool Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPConnection object at 0x7fa0ffcc7e60>: Failed to resolve 'example-autoco.io' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:32,600 WARNING urllib3.connectionpool Retrying (Retry(total=1, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPConnection object at 0x7fa0ff5db1a0>: Failed to resolve 'example-autoco.io' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:36,718 WARNING urllib3.connectionpool Retrying (Retry(total=0, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPConnection object at 0x7fa0ff5db950>: Failed to resolve 'example-autoco.io' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:36,963 WARNING urllib3.connectionpool Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPSConnection object at 0x7fa0ff5daa50>: Failed to resolve 'example-autoco.ai' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:39,074 WARNING urllib3.connectionpool Retrying (Retry(total=1, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPSConnection object at 0x7fa0ff5dac30>: Failed to resolve 'example-autoco.ai' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:43,202 WARNING urllib3.connectionpool Retrying (Retry(total=0, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPSConnection object at 0x7fa0ff5da990>: Failed to resolve 'example-autoco.ai' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:43,429 WARNING urllib3.connectionpool Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPConnection object at 0x7fa0ff5d9f70>: Failed to resolve 'example-autoco.ai' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:45,547 WARNING urllib3.connectionpool Retrying (Retry(total=1, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPConnection object at 0x7fa0ff5da060>: Failed to resolve 'example-autoco.ai' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:49,655 WARNING urllib3.connectionpool Retrying (Retry(total=0, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPConnection object at 0x7fa0ff5d9c40>: Failed to resolve 'example-autoco.ai' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:49,936 WARNING urllib3.connectionpool Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPSConnection object at 0x7fa0ff6201a0>: Failed to resolve 'exampleautoco.io' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:52,062 WARNING urllib3.connectionpool Retrying (Retry(total=1, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPSConnection object at 0x7fa0ff620380>: Failed to resolve 'exampleautoco.io' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:56,174 WARNING urllib3.connectionpool Retrying (Retry(total=0, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPSConnection object at 0x7fa0ff620560>: Failed to resolve 'exampleautoco.io' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:56,410 WARNING urllib3.connectionpool Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPConnection object at 0x7fa0ff5d9fa0>: Failed to resolve 'exampleautoco.io' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:12:58,527 WARNING urllib3.connectionpool Retrying (Retry(total=1, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPConnection object at 0x7fa0ff5d8b90>: Failed to resolve 'exampleautoco.io' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:13:02,648 WARNING urllib3.connectionpool Retrying (Retry(total=0, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPConnection object at 0x7fa0ff5d92e0>: Failed to resolve 'exampleautoco.io' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:13:02,958 WARNING urllib3.connectionpool Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPSConnection object at 0x7fa0ff5d91f0>: Failed to resolve 'exampleautoco.ai' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:13:05,080 WARNING urllib3.connectionpool Retrying (Retry(total=1, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPSConnection object at 0x7fa0ff5dabd0>: Failed to resolve 'exampleautoco.ai' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:13:09,244 WARNING urllib3.connectionpool Retrying (Retry(total=0, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPSConnection object at 0x7fa0ff5dab40>: Failed to resolve 'exampleautoco.ai' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:13:09,474 WARNING urllib3.connectionpool Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPConnection object at 0x7fa0ff5db380>: Failed to resolve 'exampleautoco.ai' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:13:11,590 WARNING urllib3.connectionpool Retrying (Retry(total=1, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPConnection object at 0x7fa0ff5db8c0>: Failed to resolve 'exampleautoco.ai' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:13:15,698 WARNING urllib3.connectionpool Retrying (Retry(total=0, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"<urllib3.connection.HTTPConnection object at 0x7fa0ff5db1d0>: Failed to resolve 'exampleautoco.ai' ([Errno -2] Name or service not known)\")': /\n2025-09-24 16:13:15,812 WARNING libs.companies.domain_resolver Could not resolve domain for Example AutoCo\n2025-09-24 16:13:15,812 ERROR libs.companies.auto_discovery Could not resolve domain for company: Example AutoCo\n",
+      "description": "Auto-discovery add company (may be partial stub)"
+    },
+    {
+      "name": "create_resume_file",
+      "cmd": [
+        "bash",
+        "-lc",
+        "echo 'Jane Dev\\nSkills: Python, Data, Systems' > resume_demo.txt"
+      ],
+      "returncode": 0,
+      "success": true,
+      "required": true,
+      "duration_s": 0.003,
+      "stdout": "",
+      "stderr": "",
+      "description": "Create demo resume file"
+    },
+    {
+      "name": "resume_parse",
+      "cmd": [
+        "ljs",
+        "resume",
+        "parse",
+        "resume_demo.txt"
+      ],
+      "returncode": 0,
+      "success": true,
+      "required": true,
+      "duration_s": 0.42,
+      "stdout": "Successfully parsed resume: resume_demo.txt\nSkills found: python\nYears of experience: Not detected\nEducation level: masters\nWord count: 5\n{\n  \"fulltext\": \"Jane DevnSkills: Python, Data, Systems\",\n  \"sections\": {},\n  \"skills\": [\n    \"python\"\n  ],\n  \"years_of_experience\": null,\n  \"education_level\": \"masters\",\n  \"contact_info\": {},\n  \"word_count\": 5,\n  \"char_count\": 38\n}\n",
+      "stderr": "",
+      "description": "Parse dummy resume"
+    },
+    {
+      "name": "schema_validate",
+      "cmd": [
+        "ljs",
+        "schema",
+        "validate"
+      ],
+      "returncode": 1,
+      "success": false,
+      "required": false,
+      "duration_s": 0.73,
+      "stdout": "WARNING: Model table 'companies' has no markdown doc\nWARNING: Model table 'embedding_versions' has no markdown doc\nWARNING: Model table 'match_outcomes' has no markdown doc\nWARNING: Model table 'matching_feature_weights' has no markdown doc\nWARNING: Model table 'scrape_sessions' has no markdown doc\nWARNING: Model table 'sessions' has no markdown doc\nWARNING: Model table 'user_credentials' has no markdown doc\nERROR: Table 'company_portal_configs' documented column 'active' not in model\nERROR: Table 'company_portal_configs' documented column 'created_at' not in model\nERROR: Table 'resumes' documented column 'version' not in model\nERROR: Table 'resumes' documented column 'parent_resume_id' not in model\nERROR: Table 'resumes' documented column 'metadata_tags' not in model\nERROR: Table 'resumes' documented column 'description' not in model\nERROR: Table 'resumes' documented column 'active' not in model\nERROR: Table 'resumes' documented column 'source_review_id' not in model\nERROR: Table 'resumes' documented column 'iteration_index' not in model\nERROR: Table 'portal_field_dictionary' documented column 'field_key' not in model\nERROR: Table 'portal_field_dictionary' documented column 'label' not in model\nERROR: Table 'portal_field_dictionary' documented column 'data_type' not in model\nWARNING: Table 'portal_field_dictionary' model has undocumented column 'key'\nWARNING: Table 'portal_field_dictionary' model has undocumented column 'pii_level'\nWARNING: Table 'job_chunks' model has undocumented column 'embedding_model'\nWARNING: Table 'job_chunks' model has undocumented column 'embedding_version'\nWARNING: Table 'job_chunks' model has undocumented column 'needs_reembedding'\nWARNING: Table 'applications' model has undocumented column 'applied_at'\nWARNING: Table 'applications' model has undocumented column 'external_id'\nWARNING: Table 'applications' model has undocumented column 'last_status_check'\nWARNING: Table 'applications' model has undocumented column 'metadata_json'\nWARNING: Table 'applications' model has undocumented column 'portal_id'\nERROR: Table 'reviews' documented column 'iteration' not in model\nERROR: Table 'reviews' documented column 'improvement_plan_json' not in model\nERROR: Table 'reviews' documented column 'proposed_new_resume_id' not in model\nERROR: Table 'reviews' documented column 'accepted_new_resume_id' not in model\nERROR: Table 'reviews' documented column 'satisfaction' not in model\nWARNING: Table 'reviews' model has undocumented column 'iteration_count'\nWARNING: Table 'reviews' model has undocumented column 'suggestions_md'\nWARNING: Table 'resume_chunks' model has undocumented column 'embedding_model'\nWARNING: Table 'resume_chunks' model has undocumented column 'embedding_version'\nWARNING: Table 'resume_chunks' model has undocumented column 'needs_reembedding'\nWARNING: Table 'application_events' model has undocumented column 'at'\nWARNING: Table 'application_events' model has undocumented column 'detail_json'\nWARNING: Table 'application_events' model has undocumented column 'kind'\nWARNING: Table 'application_profiles' model has undocumented column 'created_at'\nWARNING: Table 'application_profiles' model has undocumented column 'is_default'\nWARNING: Table 'application_profiles' model has undocumented column 'name'\nWARNING: Table 'application_profiles' model has undocumented column 'resume_id'\nERROR: Table 'portals' documented column 'kind' not in model\nERROR: Table 'portals' documented column 'created_at' not in model\nWARNING: Table 'portals' model has undocumented column 'portal_type'\nERROR: Table 'portal_templates' documented column 'template_name' not in model\nERROR: Table 'portal_templates' documented column 'version' not in model\nERROR: Table 'portal_templates' documented column 'created_at' not in model\nWARNING: Table 'application_artifacts' model has undocumented column 'sha256'\nWARNING: Table 'application_artifacts' model has undocumented column 'type'\nWARNING: Table 'application_artifacts' model has undocumented column 'url'\nSchema docs validation FAILED\n\nSchema validation failed\n",
+      "stderr": "",
+      "description": "Validate markdown \u2194 model schema"
+    }
+  ]
+}

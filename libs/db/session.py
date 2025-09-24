@@ -11,7 +11,15 @@ from typing import Iterator
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 
-DB_URL = os.getenv('LJS_DB_URL', 'postgresql+psycopg2://postgres:postgres@localhost:5432/lazyjobsearch')
+# Resolve database URL with multiple fallbacks:
+# 1. LJS_DB_URL (project-specific override)
+# 2. DATABASE_URL (12-factor style used in docker-compose)
+# 3. Sensible in-cluster default pointing at the 'postgres' service
+DB_URL = (
+    os.getenv('LJS_DB_URL')
+    or os.getenv('DATABASE_URL')
+    or 'postgresql+psycopg2://ljs_user:ljs_password@postgres:5432/lazyjobsearch'
+)
 
 # Future: pool sizing & echo controlled via config.
 engine = create_engine(DB_URL, pool_pre_ping=True, future=True)
