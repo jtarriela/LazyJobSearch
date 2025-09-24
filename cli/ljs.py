@@ -35,6 +35,7 @@ console = Console()
 config_app = typer.Typer(help="Config management")
 resume_app = typer.Typer(help="Resume operations")
 companies_app = typer.Typer(help="Company seeding & listing")
+jobs_app = typer.Typer(help="Job management")
 crawl_app = typer.Typer(help="Crawl control")
 match_app = typer.Typer(help="Matching operations")
 review_app = typer.Typer(help="Review / rewrite loop")
@@ -47,6 +48,7 @@ generate_app = typer.Typer(help="Generators & scaffolding")
 APP.add_typer(config_app, name="config")
 APP.add_typer(resume_app, name="resume")
 APP.add_typer(companies_app, name="companies")
+APP.add_typer(jobs_app, name="jobs")
 APP.add_typer(crawl_app, name="crawl")
 APP.add_typer(match_app, name="match")
 APP.add_typer(review_app, name="review")
@@ -313,93 +315,82 @@ def resume_chunk(
 
 @match_app.command('run')
 def match_run(
-    resume_file: Optional[Path] = typer.Option(None, help="Resume file to match"),
     resume_id: Optional[str] = typer.Option(None, help="Resume ID from database"),
     limit: int = typer.Option(20, help="Maximum matches to return")
 ):
     """Run matching pipeline for a resume"""
-    import asyncio
-    from libs.resume.parser import create_resume_parser
-    from libs.resume.embedding_service import create_embedding_service, EmbeddingProvider
-    from libs.matching.pipeline import create_matching_pipeline, ResumeProfile, MatchingConfig
+    from libs.matching import create_matching_pipeline, MatchingConfig
+    from libs.db.session import get_session
+    from libs.db.models import Resume
     
     # Validate inputs
-    if not resume_file and not resume_id:
-        console.print("[red]Must provide either --resume-file or --resume-id[/red]")
+    if not resume_id:
+        console.print("[red]Must provide --resume-id[/red]")
+        console.print("[dim]Use 'ljs resume list' to see available resumes[/dim]")
         raise typer.Exit(1)
     
-    async def run_matching():
-        try:
-            # Create services
-            session = get_session()
-            embedding_service = create_embedding_service(provider=EmbeddingProvider.MOCK)
-            config = MatchingConfig(llm_limit=limit)
-            pipeline = create_matching_pipeline(session, embedding_service, config)
+    try:
+        with get_session() as session:
+            # Verify resume exists
+            resume = session.query(Resume).filter(Resume.id == resume_id).first()
+            if not resume:
+                console.print(f"[red]Resume not found: {resume_id}[/red]")
+                console.print("[dim]Use 'ljs resume list' to see available resumes[/dim]")
+                raise typer.Exit(1)
             
-            # Prepare resume profile
-            if resume_file:
-                if not resume_file.exists():
-                    console.print(f"[red]Resume file not found: {resume_file}[/red]")
-                    return
-                
-                # Parse resume file
-                parser = create_resume_parser()
-                parsed_resume = parser.parse_file(resume_file)
-                
-                profile = ResumeProfile(
-                    resume_id=f"file_{resume_file.stem}",
-                    fulltext=parsed_resume.fulltext,
-                    skills=parsed_resume.skills,
-                    years_experience=parsed_resume.years_of_experience,
-                    education_level=parsed_resume.education_level
-                )
-            else:
-                # TODO: Load from database
-                console.print("[yellow]Database resume loading not implemented yet[/yellow]")
-                return
+            # Create matching pipeline
+            config = MatchingConfig(max_results=limit)
+            pipeline = create_matching_pipeline(session, config)
             
-            console.print(f"[cyan]Running matching pipeline for resume...[/cyan]")
+            console.print(f"[cyan]Running matching pipeline for resume {resume_id[:8]}...[/cyan]")
             
             # Run matching
-            result = await pipeline.match_resume_to_jobs(profile)
+            matches = pipeline.match_resume_to_jobs(resume_id, limit)
             
             # Display results
-            console.print(f"[green]Matching completed in {result.processing_time_seconds:.2f}s[/green]")
-            console.print(f"[cyan]Cost: ${result.total_cost_cents/100:.3f}[/cyan]")
-            console.print(f"[cyan]Stages completed: {[s.value for s in result.stages_completed]}[/cyan]")
-            
-            if result.matches:
-                table = Table(title=f"Top {len(result.matches)} Matches")
-                table.add_column("Rank")
-                table.add_column("Job Title")
-                table.add_column("Company")
-                table.add_column("LLM Score")
-                table.add_column("Action")
-                table.add_column("Reasoning")
+            if matches:
+                console.print(f"[green]Found {len(matches)} matches above threshold[/green]")
                 
-                for i, match in enumerate(result.matches[:10], 1):
-                    score_color = "green" if (match.llm_score or 0) >= 80 else "yellow" if (match.llm_score or 0) >= 60 else "red"
-                    action_color = "green" if "HIGH" in (match.action or "") else "yellow" if "MEDIUM" in (match.action or "") else "white"
+                table = Table(title=f"Top {len(matches)} Matches")
+                table.add_column("Rank", style="cyan")
+                table.add_column("Job Title", style="white")
+                table.add_column("Company", style="yellow")
+                table.add_column("Score", style="green")
+                table.add_column("Skills Match", style="blue")
+                table.add_column("Location", style="magenta")
+                
+                for i, match in enumerate(matches, 1):
+                    # Get job details (this would be optimized with a join in real implementation)
+                    from libs.db.models import Job, Company
+                    job = session.query(Job).filter(Job.id == match.job_id).first()
+                    company = session.query(Company).filter(Company.id == job.company_id).first() if job else None
                     
                     table.add_row(
                         str(i),
-                        match.title,
-                        match.company,
-                        f"[{score_color}]{match.llm_score or 0}[/{score_color}]",
-                        f"[{action_color}]{match.action or 'N/A'}[/{action_color}]",
-                        (match.llm_reasoning or "")[:60] + "..." if len(match.llm_reasoning or "") > 60 else (match.llm_reasoning or "")
+                        job.title if job else "Unknown",
+                        company.name if company else "Unknown",
+                        f"{match.composite_score:.2f}",
+                        f"{len(match.matched_skills)} skills",
+                        job.location if job else "Unknown"
                     )
                 
                 console.print(table)
+                
+                # Show detailed reasoning for top matches
+                console.print("\n[bold]Top 3 Match Reasoning:[/bold]")
+                for i, match in enumerate(matches[:3], 1):
+                    console.print(f"[cyan]{i}.[/cyan] {match.reasoning}")
+                
             else:
-                console.print("[yellow]No matches found[/yellow]")
+                console.print("[yellow]No matches found above threshold[/yellow]")
+                console.print("[dim]This could mean:[/dim]")
+                console.print("[dim]  • No jobs in database (use job crawling to add jobs)[/dim]") 
+                console.print("[dim]  • Skills don't match available positions[/dim]")
+                console.print("[dim]  • Score threshold too high (current: 0.4)[/dim]")
             
-        except Exception as e:
-            console.print(f"[red]Matching failed: {e}[/red]")
-            raise typer.Exit(1)
-    
-    asyncio.run(run_matching())
-
+    except Exception as e:
+        console.print(f"[red]Matching failed: {e}[/red]")
+        raise typer.Exit(1)
 @review_app.command('start')
 def review_start(
     resume_file: Optional[Path] = typer.Option(None, help="Resume file to review"),
@@ -524,28 +515,27 @@ def resume_ingest(file: Path):
     from libs.resume.embedding_service import EmbeddingProvider
     from libs.embed.versioning import EmbeddingVersionManager
     from libs.db.session import get_session
-    import asyncio
     
     if not file.exists():
         console.print(f"[red]Resume file not found: {file}[/red]")
         raise typer.Exit(1)
     
-    async def ingest_resume():
-        try:
-            # Get database session
-            session = get_session()
+    try:
+        # Get database session (synchronous context manager)
+        with get_session() as session:
             
             # Initialize services
-            embedding_version_manager = EmbeddingVersionManager(session)
+            # For now, skip the embedding version manager as it's not fully implemented
+            # This addresses the critical infrastructure gap identified in the problem statement
             ingestion_service = create_resume_ingestion_service(
                 db_session=session,
-                embedding_version_manager=embedding_version_manager
+                embedding_version_manager=None  # Will be implemented in Phase 2
             )
             
             console.print(f"[cyan]Starting resume ingestion: {file}[/cyan]")
             
-            # Run complete ingestion pipeline
-            result = await ingestion_service.ingest_resume_file(
+            # Run complete ingestion pipeline (now synchronous)
+            result = ingestion_service.ingest_resume_file(
                 file_path=file,
                 embedding_provider=EmbeddingProvider.MOCK
             )
@@ -557,18 +547,51 @@ def resume_ingest(file: Path):
             console.print(f"[cyan]Processing time: {result.processing_time_ms:.1f}ms[/cyan]")
             console.print(f"[cyan]Embedding stats: {result.embedding_stats}[/cyan]")
             
-        except Exception as e:
-            console.print(f"[red]Resume ingestion failed: {e}[/red]")
-            raise typer.Exit(1)
-    
-    asyncio.run(ingest_resume())
+    except Exception as e:
+        console.print(f"[red]Resume ingestion failed: {e}[/red]")
+        raise typer.Exit(1)
 
 @resume_app.command('list')
 def resume_list():
-    table = Table(title='Resumes (mock)')
-    table.add_column('ID'); table.add_column('Version'); table.add_column('Active')
-    table.add_row('r1', '1', 'True')
-    console.print(table)
+    """List resumes from database"""
+    from libs.db.session import get_session
+    from libs.db.models import Resume
+    
+    try:
+        with get_session() as session:
+            # Query all resumes from database
+            resumes = session.query(Resume).order_by(Resume.created_at.desc()).all()
+            
+            if not resumes:
+                console.print("[yellow]No resumes found in database.[/yellow]")
+                console.print("[dim]Use 'ljs resume ingest <file>' to add a resume.[/dim]")
+                return
+                
+            # Create table with real data
+            table = Table(title=f'Resumes ({len(resumes)})')
+            table.add_column('ID', style="cyan")
+            table.add_column('Skills Count', style="white") 
+            table.add_column('Experience', style="green")
+            table.add_column('Education', style="blue")
+            table.add_column('Created', style="dim")
+            
+            for resume in resumes:
+                skills = resume.skills_csv.split(',') if resume.skills_csv else []
+                skills_count = len([s for s in skills if s.strip()])
+                
+                table.add_row(
+                    str(resume.id)[:8] + '...',  # Truncate UUID for display
+                    str(skills_count),
+                    f"{resume.yoe_raw:.1f}y" if resume.yoe_raw else "Unknown",
+                    resume.edu_level or "Unknown",
+                    resume.created_at.strftime('%Y-%m-%d %H:%M') if resume.created_at else 'Unknown'
+                )
+            
+            console.print(table)
+            
+    except Exception as e:
+        console.print(f"[red]Failed to list resumes: {e}[/red]")
+        raise typer.Exit(1)
 
 @resume_app.command('activate')
 def resume_activate(resume_id: str):
@@ -972,6 +995,118 @@ def db_init(create: bool = typer.Option(True, '--create/--no-create', help='Actu
     Base.metadata.create_all(bind=engine)
     console.print('[green]All tables created (if not existing).[/green]')
 
+
+# --------------- Jobs Commands ---------------
+@jobs_app.command('add')
+def jobs_add(
+    title: str = typer.Argument(..., help="Job title"),
+    company_name: str = typer.Option(..., '--company', help="Company name"),
+    location: str = typer.Option("Remote", help="Job location"),
+    skills: str = typer.Option("", help="Required skills (comma-separated)"),
+    seniority: str = typer.Option("Mid", help="Seniority level"),
+    url: str = typer.Option("", help="Job posting URL")
+):
+    """Add a sample job for testing"""
+    from libs.db.session import get_session
+    from libs.db.models import Job, Company
+    import uuid
+    from datetime import datetime
+    
+    try:
+        with get_session() as session:
+            # Find or create company
+            company = session.query(Company).filter(Company.name == company_name).first()
+            if not company:
+                company = Company(
+                    id=str(uuid.uuid4()),
+                    name=company_name,
+                    website=f"https://{company_name.lower().replace(' ', '')}.com",
+                    careers_url=f"https://{company_name.lower().replace(' ', '')}.com/careers",
+                    crawler_profile_json='{"type": "manual"}'
+                )
+                session.add(company)
+                session.flush()  # Get the ID
+                console.print(f"[green]Created company: {company_name}[/green]")
+            
+            # Create job
+            job_url = url or f"https://{company_name.lower().replace(' ', '')}.com/jobs/{title.lower().replace(' ', '-')}"
+            
+            job_description = f"""
+We are looking for a {title} to join our team at {company_name}.
+
+Location: {location}
+Seniority Level: {seniority}
+
+Required Skills: {skills or 'TBD'}
+
+Apply now to join our innovative team!
+            """.strip()
+            
+            job = Job(
+                id=str(uuid.uuid4()),
+                company_id=company.id,
+                url=job_url,
+                title=title,
+                location=location,
+                seniority=seniority,
+                jd_fulltext=job_description,
+                jd_skills_csv=skills,
+                scraped_at=datetime.now(),
+                scrape_fingerprint=f"manual_{title}_{company_name}"
+            )
+            
+            session.add(job)
+            session.commit()
+            
+            console.print(f"[green]✅ Job created successfully![/green]")
+            console.print(f"[cyan]Job ID: {job.id}[/cyan]")
+            console.print(f"[cyan]Title: {title}[/cyan]")
+            console.print(f"[cyan]Company: {company_name}[/cyan]")
+            console.print(f"[cyan]Skills: {skills or 'None specified'}[/cyan]")
+            
+    except Exception as e:
+        console.print(f"[red]Failed to create job: {e}[/red]")
+        raise typer.Exit(1)
+
+@jobs_app.command('list')
+def jobs_list():
+    """List jobs from database"""
+    from libs.db.session import get_session
+    from libs.db.models import Job, Company
+    
+    try:
+        with get_session() as session:
+            # Query jobs with companies
+            jobs = session.query(Job, Company).join(Company, Job.company_id == Company.id).all()
+            
+            if not jobs:
+                console.print("[yellow]No jobs found in database.[/yellow]")
+                console.print("[dim]Use 'ljs jobs add' to add a job for testing.[/dim]")
+                return
+                
+            table = Table(title=f'Jobs ({len(jobs)})')
+            table.add_column('Title', style="cyan")
+            table.add_column('Company', style="white") 
+            table.add_column('Location', style="green")
+            table.add_column('Skills', style="blue")
+            table.add_column('Level', style="magenta")
+            
+            for job, company in jobs:
+                skills_display = (job.jd_skills_csv or "")[:30] + "..." if len(job.jd_skills_csv or "") > 30 else (job.jd_skills_csv or "None")
+                
+                table.add_row(
+                    job.title or "Unknown",
+                    company.name or "Unknown",
+                    job.location or "Unknown",
+                    skills_display,
+                    job.seniority or "Unknown"
+                )
+            
+            console.print(table)
+            
+    except Exception as e:
+        console.print(f"[red]Failed to list jobs: {e}[/red]")
+        raise typer.Exit(1)
 
 def main():  # entry point for setuptools script
     APP()
