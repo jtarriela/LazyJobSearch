@@ -1,40 +1,31 @@
-version: '3.8'
-
 services:
-  # PostgreSQL with pgvector extension
   postgres:
     image: pgvector/pgvector:pg16
+    container_name: lazyjobsearch-postgres
     environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
       POSTGRES_DB: lazyjobsearch
-      POSTGRES_USER: ljs_user
-      POSTGRES_PASSWORD: ljs_password
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d lazyjobsearch"]
+      interval: 5s
+      retries: 10
+      timeout: 3s
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ljs_user -d lazyjobsearch"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
-  # Redis for caching and job queues
   redis:
-    image: redis:7-alpine
+    image: redis:7
+    container_name: lazyjobsearch-redis
     ports:
       - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
 
-  # MinIO for object storage (artifacts, resumes, etc.)
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:RELEASE.2024-08-17T01-00-00Z
+    container_name: lazyjobsearch-minio
+    command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin123
@@ -43,47 +34,23 @@ services:
       - "9001:9001"
     volumes:
       - minio_data:/data
-    command: server /data --console-address ":9001"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
 
-  # LazyJobSearch API (when implemented)
-  # api:
-  #   build: .
-  #   environment:
-  #     DATABASE_URL: "postgresql://ljs_user:ljs_password@postgres:5432/lazyjobsearch"
-  #     REDIS_URL: "redis://redis:6379/0"
-  #     MINIO_ENDPOINT: "minio:9000"
-  #   ports:
-  #     - "8000:8000"
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #     redis:
-  #       condition: service_healthy
-  #   volumes:
-  #     - .:/app
-
-  # Background worker (when implemented)
-  # worker:
-  #   build: .
-  #   command: ["python", "-m", "celery", "worker", "-A", "libs.worker", "--loglevel=info"]
-  #   environment:
-  #     DATABASE_URL: "postgresql://ljs_user:ljs_password@postgres:5432/lazyjobsearch"
-  #     REDIS_URL: "redis://redis:6379/0"
-  #     MINIO_ENDPOINT: "minio:9000"
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #     redis:
-  #       condition: service_healthy
-  #   volumes:
-  #     - .:/app
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lazyjobsearch-app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      LJS_DB_URL: postgresql+psycopg2://postgres:postgres@postgres:5432/lazyjobsearch
+      PYTHONPATH: /app
+    working_dir: /app
+    volumes:
+      - .:/app:delegated
+    command: bash scripts/init_and_hold.sh
 
 volumes:
   postgres_data:
-  redis_data:
   minio_data:
