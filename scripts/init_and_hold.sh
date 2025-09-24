@@ -9,6 +9,9 @@ for i in {1..40}; do
   sleep 1
 done
 
+echo "[init] Ensuring pgvector extension..."
+psql "postgresql://postgres:postgres@postgres:5432/lazyjobsearch" -c "CREATE EXTENSION IF NOT EXISTS vector;" || true
+
 echo "[init] Creating tables if missing..."
 python - <<'EOF'
 from libs.db.session import engine
