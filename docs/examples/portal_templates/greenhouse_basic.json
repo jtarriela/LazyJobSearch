@@ -1,7 +1,7 @@
 {
   "version": 1,
   "meta": {"portal": "greenhouse", "variant": "basic", "author": "example"},
-  "start": {"url": "https://jobs.example.com/apply/12345"},
+  "start": {"url": "https://boards.greenhouse.io/company/jobs/12345"},
   "steps": [
     {"action": "click", "selector": "button.apply"},
     {"action": "type", "selector": "input[name=email]", "value": "{{profile.email}}"},

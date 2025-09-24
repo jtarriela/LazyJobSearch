@@ -1,0 +1,258 @@
+{
+  "version": 1,
+  "meta": {
+    "portal": "workday",
+    "variant": "basic", 
+    "author": "LazyJobSearch Team",
+    "description": "Basic Workday ATS portal automation template"
+  },
+  "start": {
+    "url": "{{apply_base_url}}",
+    "wait": 3000
+  },
+  "preconditions": [
+    {
+      "type": "exists",
+      "selector": "[data-automation-id='formContainer']"
+    }
+  ],
+  "environment": {
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "viewport": {
+      "width": 1366,
+      "height": 768
+    }
+  },
+  "steps": [
+    {
+      "id": "start_application",
+      "action": "click", 
+      "selector": "[data-automation-id='Apply'] button",
+      "waitFor": "selector",
+      "waitSelector": "[data-automation-id='firstName']",
+      "timeoutMs": 10000
+    },
+    {
+      "id": "personal_first_name",
+      "action": "type",
+      "selector": "[data-automation-id='firstName']",
+      "value": "{{profile.first_name}}"
+    },
+    {
+      "id": "personal_last_name", 
+      "action": "type",
+      "selector": "[data-automation-id='lastName']",
+      "value": "{{profile.last_name}}"
+    },
+    {
+      "id": "contact_email",
+      "action": "type",
+      "selector": "[data-automation-id='email']",
+      "value": "{{profile.email}}"
+    },
+    {
+      "id": "contact_phone",
+      "action": "type", 
+      "selector": "[data-automation-id='phone']",
+      "value": "{{profile.phone}}"
+    },
+    {
+      "id": "address_country",
+      "action": "click",
+      "selector": "[data-automation-id='country'] button",
+      "waitFor": "selector",
+      "waitSelector": "[data-automation-id='country'] [role='listbox']"
+    },
+    {
+      "id": "select_country_option",
+      "action": "click",
+      "selector": "[data-automation-id='country'] [role='option'][title*='{{profile.country}}']"
+    },
+    {
+      "id": "address_city",
+      "action": "type",
+      "selector": "[data-automation-id='city']",
+      "value": "{{profile.city}}",
+      "skipIf": [
+        {
+          "selector": "[data-automation-id='city']",
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "address_state",
+      "action": "click", 
+      "selector": "[data-automation-id='state'] button",
+      "skipIf": [
+        {
+          "selector": "[data-automation-id='state']",
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "select_state_option",
+      "action": "click",
+      "selector": "[data-automation-id='state'] [role='option'][title*='{{profile.state}}']",
+      "skipIf": [
+        {
+          "selector": "[data-automation-id='state'] [role='option'][title*='{{profile.state}}']",
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "continue_to_experience",
+      "action": "click",
+      "selector": "[data-automation-id='next']",
+      "waitFor": "selector", 
+      "waitSelector": "[data-automation-id='file-upload-input-ref']",
+      "timeoutMs": 8000
+    },
+    {
+      "id": "upload_resume",
+      "action": "upload",
+      "selector": "[data-automation-id='file-upload-input-ref']",
+      "file": "{{files.resume}}",
+      "waitFor": "network-idle",
+      "timeoutMs": 15000
+    },
+    {
+      "id": "continue_to_additional_info", 
+      "action": "click",
+      "selector": "[data-automation-id='next']",
+      "waitFor": "dom-stable",
+      "timeoutMs": 5000
+    },
+    {
+      "id": "work_authorization",
+      "action": "radio",
+      "selector": "input[name*='workAuth'][value='{{answers.work_authorization}}']",
+      "skipIf": [
+        {
+          "selector": "input[name*='workAuth']",
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "willing_to_relocate",
+      "action": "radio", 
+      "selector": "input[name*='relocate'][value='{{answers.willing_to_relocate}}']",
+      "skipIf": [
+        {
+          "selector": "input[name*='relocate']",
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "continue_to_eeo",
+      "action": "click",
+      "selector": "[data-automation-id='next']",
+      "waitFor": "selector",
+      "waitSelector": "[data-automation-id='eeoContainer']",
+      "timeoutMs": 5000,
+      "skipIf": [
+        {
+          "selector": "[data-automation-id='eeoContainer']",
+          "predicate": "exists"
+        }
+      ]
+    },
+    {
+      "id": "eeo_gender",
+      "action": "radio",
+      "selector": "input[name*='gender'][value='{{answers.gender}}']",
+      "skipIf": [
+        {
+          "selector": "input[name*='gender']", 
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "eeo_ethnicity",
+      "action": "radio",
+      "selector": "input[name*='ethnicity'][value='{{answers.ethnicity}}']",
+      "skipIf": [
+        {
+          "selector": "input[name*='ethnicity']",
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "eeo_veteran",
+      "action": "radio",
+      "selector": "input[name*='veteran'][value='{{answers.veteran_status}}']", 
+      "skipIf": [
+        {
+          "selector": "input[name*='veteran']",
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "eeo_disability",
+      "action": "radio", 
+      "selector": "input[name*='disability'][value='{{answers.disability_status}}']",
+      "skipIf": [
+        {
+          "selector": "input[name*='disability']",
+          "predicate": "notExists"
+        }
+      ]
+    },
+    {
+      "id": "final_submit",
+      "action": "click",
+      "selector": "[data-automation-id='submitApplication']",
+      "waitFor": "network-idle",
+      "timeoutMs": 20000
+    }
+  ],
+  "receipt": {
+    "selector": "[data-automation-id='applicationComplete'] [data-automation-id='confirmationNumber']",
+    "regex": "([A-Z0-9-]+)"
+  },
+  "validate": [
+    {
+      "selector": "[data-automation-id='errorText']",
+      "severity": "warn", 
+      "message": "Workday form validation error"
+    },
+    {
+      "selector": "[data-automation-id='alertMessage']",
+      "severity": "info",
+      "message": "System alert or notification"
+    },
+    {
+      "selector": ".wd-popup-content",
+      "severity": "block",
+      "message": "Unexpected popup dialog detected"
+    }
+  ],
+  "errorRecovery": {
+    "popup_dialog": {
+      "steps": [
+        {
+          "action": "click",
+          "selector": "[data-automation-id='closeButton']",
+          "skipIf": [
+            {
+              "selector": "[data-automation-id='closeButton']", 
+              "predicate": "notExists"
+            }
+          ]
+        }
+      ],
+      "maxAttempts": 1
+    }
+  },
+  "throttle": {
+    "betweenStepsMs": 1500,
+    "jitterMs": 800
+  }
+}

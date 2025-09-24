@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Acme Corp",
+    "domain": "acme.com"
+  },
+  {
+    "name": "TechStart Inc", 
+    "domain": "techstart.io"
+  },
+  {
+    "name": "Global Solutions",
+    "domain": "globalsolutions.net"
+  },
+  {
+    "name": "DataFlow Systems",
+    "domain": "dataflow.com"
+  },
+  {
+    "name": "InnovateNow",
+    "domain": "innovatenow.org"
+  }
+]

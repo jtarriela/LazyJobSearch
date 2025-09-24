@@ -44,6 +44,7 @@ events_app = typer.Typer(help="Event stream")
 schema_app = typer.Typer(help="Schema & documentation validation")
 db_app = typer.Typer(help="Database migrations & maintenance")
 generate_app = typer.Typer(help="Generators & scaffolding")
+template_app = typer.Typer(help="Portal template operations")
 
 APP.add_typer(config_app, name="config")
 APP.add_typer(resume_app, name="resume")
@@ -57,6 +58,7 @@ APP.add_typer(events_app, name="events")
 APP.add_typer(schema_app, name="schema")
 APP.add_typer(db_app, name="db")
 APP.add_typer(generate_app, name="generate")
+APP.add_typer(template_app, name="template")
 
 
 # ------------------ Config Loading ------------------
@@ -1578,6 +1580,218 @@ def jobs_list():
     except Exception as e:
         console.print(f"[red]Failed to list jobs: {e}[/red]")
         raise typer.Exit(1)
+
+# ------------------ Template Operations ------------------
+
+@template_app.command('validate')
+def template_validate(
+    file_path: Optional[Path] = typer.Argument(None, help="Path to template file (validates all if not specified)"),
+    schema_path: Optional[Path] = typer.Option(None, "--schema", help="Path to schema file"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed validation output")
+):
+    """Validate portal template(s) against the DSL schema"""
+    from jsonschema import validate as js_validate, ValidationError
+    
+    try:
+        # Default paths
+        if not schema_path:
+            schema_path = Path(__file__).parent.parent / "docs" / "portal_template_dsl.schema.json"
+        
+        if not file_path:
+            # Validate all example templates
+            templates_dir = Path(__file__).parent.parent / "docs" / "examples" / "portal_templates"
+            template_files = list(templates_dir.glob("*.json"))
+        else:
+            template_files = [file_path]
+        
+        if not template_files:
+            console.print("[yellow]No template files found to validate[/yellow]")
+            return
+            
+        # Load schema
+        with open(schema_path) as f:
+            schema = json.load(f)
+        
+        console.print(f"[cyan]Validating {len(template_files)} template(s)...[/cyan]")
+        
+        errors = []
+        success_count = 0
+        
+        for template_path in template_files:
+            try:
+                with open(template_path) as f:
+                    template = json.load(f)
+                
+                # Validate against schema
+                js_validate(template, schema)
+                
+                # Security validation
+                from libs.autoapply.security import create_execution_sandbox
+                sandbox = create_execution_sandbox()
+                security_violations = sandbox.validate_template_security(template)
+                
+                if security_violations:
+                    if verbose:
+                        console.print(f"[yellow]⚠️  {template_path.name}: Schema valid, security warnings[/yellow]")
+                        for violation in security_violations:
+                            console.print(f"    - {violation}")
+                    else:
+                        console.print(f"[yellow]⚠️  {template_path.name}: Security warnings ({len(security_violations)})[/yellow]")
+                else:
+                    console.print(f"[green]✅ {template_path.name}[/green]")
+                    
+                success_count += 1
+                
+            except ValidationError as e:
+                errors.append(f"❌ {template_path.name}: {e.message}")
+                if verbose:
+                    console.print(f"[red]❌ {template_path.name}:[/red]")
+                    console.print(f"    [red]{e.message}[/red]")
+                    if e.absolute_path:
+                        console.print(f"    [dim]Path: {' -> '.join(str(p) for p in e.absolute_path)}[/dim]")
+                
+            except FileNotFoundError:
+                errors.append(f"❌ {template_path.name}: File not found")
+                
+            except json.JSONDecodeError as e:
+                errors.append(f"❌ {template_path.name}: Invalid JSON - {e.msg}")
+                
+            except Exception as e:
+                errors.append(f"❌ {template_path.name}: {str(e)}")
+        
+        # Summary
+        if not verbose and errors:
+            console.print(f"\n[red]Validation errors:[/red]")
+            for error in errors:
+                console.print(f"  {error}")
+        
+        if errors:
+            console.print(f"\n[red]{len(errors)} template(s) failed validation[/red]")
+            raise typer.Exit(1)
+        else:
+            console.print(f"\n[green]✅ All {success_count} template(s) validated successfully[/green]")
+            
+    except FileNotFoundError as e:
+        console.print(f"[red]File not found: {e}[/red]")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[red]Validation error: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@template_app.command('list')
+def template_list():
+    """List available portal templates"""
+    templates_dir = Path(__file__).parent.parent / "docs" / "examples" / "portal_templates"
+    
+    if not templates_dir.exists():
+        console.print("[yellow]No templates directory found[/yellow]")
+        return
+    
+    template_files = list(templates_dir.glob("*.json"))
+    
+    if not template_files:
+        console.print("[yellow]No template files found[/yellow]")
+        return
+    
+    table = Table(title="Portal Templates")
+    table.add_column("Template", style="cyan")
+    table.add_column("Portal", style="green") 
+    table.add_column("Version", style="yellow")
+    table.add_column("Description", style="dim")
+    
+    for template_path in sorted(template_files):
+        try:
+            with open(template_path) as f:
+                template = json.load(f)
+            
+            meta = template.get("meta", {})
+            table.add_row(
+                template_path.name,
+                meta.get("portal", "Unknown"),
+                str(template.get("version", "1")),
+                meta.get("description", "No description")
+            )
+            
+        except Exception as e:
+            table.add_row(
+                template_path.name,
+                "Error",
+                "-", 
+                f"Failed to load: {e}"
+            )
+    
+    console.print(table)
+
+
+@template_app.command('lint')
+def template_lint(
+    file_path: Path = typer.Argument(..., help="Path to template file"),
+    fix: bool = typer.Option(False, "--fix", help="Attempt to auto-fix issues")
+):
+    """Lint a portal template for best practices and common issues"""
+    try:
+        with open(file_path) as f:
+            template = json.load(f)
+        
+        issues = []
+        
+        # Check for common issues
+        meta = template.get("meta", {})
+        if not meta.get("description"):
+            issues.append("Missing template description in meta")
+        
+        if not meta.get("author"):
+            issues.append("Missing template author in meta")
+        
+        # Check steps
+        steps = template.get("steps", [])
+        for i, step in enumerate(steps):
+            # Check for missing IDs
+            if not step.get("id"):
+                issues.append(f"Step {i+1}: Missing step ID")
+            
+            # Check for hardcoded waits without good reason
+            if step.get("action") == "wait" and step.get("timeoutMs", 0) > 10000:
+                issues.append(f"Step {i+1}: Long wait time ({step.get('timeoutMs')}ms)")
+            
+            # Check for missing selectors
+            action = step.get("action")
+            if action in ["click", "type", "select", "upload"] and not step.get("selector"):
+                issues.append(f"Step {i+1}: Missing selector for {action} action")
+        
+        # Check for template variables
+        from libs.autoapply.security import create_template_sanitizer
+        sanitizer = create_template_sanitizer()
+        
+        template_str = json.dumps(template)
+        variables = sanitizer.extract_template_variables(template_str)
+        
+        for var in variables:
+            if not sanitizer.validate_template_variable(var):
+                issues.append(f"Potentially unsafe template variable: {var}")
+        
+        # Output results
+        if not issues:
+            console.print(f"[green]✅ {file_path.name} looks good![/green]")
+        else:
+            console.print(f"[yellow]⚠️  Found {len(issues)} issue(s) in {file_path.name}:[/yellow]")
+            for issue in issues:
+                console.print(f"  - {issue}")
+            
+            if fix:
+                console.print("[cyan]Auto-fix not implemented yet[/cyan]")
+        
+    except FileNotFoundError:
+        console.print(f"[red]Template file not found: {file_path}[/red]")
+        raise typer.Exit(1)
+    except json.JSONDecodeError as e:
+        console.print(f"[red]Invalid JSON in template: {e.msg}[/red]")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[red]Error linting template: {e}[/red]")
+        raise typer.Exit(1)
+
 
 def main():  # entry point for setuptools script
     APP()
