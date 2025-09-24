@@ -2,6 +2,23 @@
 
 Implements the LLM-powered resume critique and iterative improvement system.
 Handles version lineage, diff generation, and acceptance workflow.
+
+State Model:
+The review workflow follows a defined state machine with the following states:
+- PENDING: Initial state when review is created
+- IN_PROGRESS: Review is being actively worked on through iterations
+- COMPLETED: Review process is finished, awaiting user decision
+- ACCEPTED: User has accepted the review results (terminal state)
+- REJECTED: User has rejected the review (terminal state)
+
+Valid State Transitions:
+- pending → in_progress, rejected
+- in_progress → completed, accepted, rejected  
+- completed → accepted, rejected
+- accepted/rejected are terminal states (no further transitions)
+
+This state model ensures consistency between CLI commands and internal logic,
+addressing the state discrepancy identified in the review workflow audit.
 """
 from __future__ import annotations
 import logging
@@ -21,6 +38,48 @@ class ReviewStatus(Enum):
     COMPLETED = "completed"
     ACCEPTED = "accepted"
     REJECTED = "rejected"
+
+# Valid state transitions for review workflow
+VALID_TRANSITIONS = {
+    ReviewStatus.PENDING: [ReviewStatus.IN_PROGRESS, ReviewStatus.REJECTED],
+    ReviewStatus.IN_PROGRESS: [ReviewStatus.COMPLETED, ReviewStatus.ACCEPTED, ReviewStatus.REJECTED],
+    ReviewStatus.COMPLETED: [ReviewStatus.ACCEPTED, ReviewStatus.REJECTED],
+    ReviewStatus.ACCEPTED: [],  # Terminal state
+    ReviewStatus.REJECTED: []   # Terminal state
+}
+
+def validate_status_transition(current_status: str, new_status: str) -> bool:
+    """Validate if a status transition is allowed.
+    
+    Args:
+        current_status: Current status string
+        new_status: Desired new status string
+        
+    Returns:
+        True if transition is valid, False otherwise
+    """
+    try:
+        current = ReviewStatus(current_status)
+        new = ReviewStatus(new_status)
+        return new in VALID_TRANSITIONS.get(current, [])
+    except ValueError:
+        # Invalid status values
+        return False
+
+def get_valid_next_states(current_status: str) -> List[str]:
+    """Get list of valid next states for the current status.
+    
+    Args:
+        current_status: Current status string
+        
+    Returns:
+        List of valid next status strings
+    """
+    try:
+        current = ReviewStatus(current_status)
+        return [status.value for status in VALID_TRANSITIONS.get(current, [])]
+    except ValueError:
+        return []
 
 @dataclass
 class ReviewCritique:

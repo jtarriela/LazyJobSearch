@@ -1311,6 +1311,7 @@ def review_start(job_id: str, resume_id: Optional[str] = typer.Option(None, help
     """Start a resume review for a specific job"""
     from libs.db.session import get_session
     from libs.db.models import Job, Resume, Review, Company
+    from libs.resume.review import ReviewStatus
     import uuid
     from datetime import datetime
     
@@ -1363,7 +1364,7 @@ def review_start(job_id: str, resume_id: Optional[str] = typer.Option(None, help
                 suggestions_md="",
                 iteration_count=0,
                 parent_review_id=None,
-                status='pending',
+                status=ReviewStatus.PENDING.value,
                 created_at=datetime.utcnow()
             )
             
@@ -1416,6 +1417,7 @@ def review_next(review_id: str):
     """Move to next iteration of a review (placeholder)"""
     from libs.db.session import get_session
     from libs.db.models import Review
+    from libs.resume.review import ReviewStatus, validate_status_transition
     
     try:
         with get_session() as session:
@@ -1424,8 +1426,15 @@ def review_next(review_id: str):
                 console.print(f"[red]Review not found: {review_id}[/red]")
                 raise typer.Exit(1)
             
+            # Validate status transition
+            new_status = ReviewStatus.IN_PROGRESS.value
+            if not validate_status_transition(review.status, new_status):
+                console.print(f"[red]Invalid status transition: {review.status} -> {new_status}[/red]")
+                console.print(f"[dim]Current status: {review.status}[/dim]")
+                raise typer.Exit(1)
+            
             review.iteration_count += 1
-            review.status = 'in_progress'
+            review.status = new_status
             session.commit()
             
             console.print(f"[green]✅ Moved to next iteration: {review.iteration_count}[/green]")
@@ -1441,6 +1450,7 @@ def review_satisfy(review_id: str):
     """Mark a review as satisfied/completed"""
     from libs.db.session import get_session
     from libs.db.models import Review
+    from libs.resume.review import ReviewStatus, validate_status_transition
     
     try:
         with get_session() as session:
@@ -1449,11 +1459,18 @@ def review_satisfy(review_id: str):
                 console.print(f"[red]Review not found: {review_id}[/red]")
                 raise typer.Exit(1)
             
-            # Update status to satisfied
-            review.status = 'satisfied'
+            # Validate status transition
+            new_status = ReviewStatus.ACCEPTED.value
+            if not validate_status_transition(review.status, new_status):
+                console.print(f"[red]Invalid status transition: {review.status} -> {new_status}[/red]")
+                console.print(f"[dim]Current status: {review.status}[/dim]")
+                raise typer.Exit(1)
+            
+            # Update status to accepted (consistent with ReviewStatus enum)
+            review.status = new_status
             session.commit()
             
-            console.print(f"[green]✅ Review {review_id[:8]}... marked as satisfied[/green]")
+            console.print(f"[green]✅ Review {review_id[:8]}... marked as accepted[/green]")
             console.print(f"[cyan]Status: {review.status}[/cyan]")
             
     except Exception as e:

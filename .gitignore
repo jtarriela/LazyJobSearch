@@ -47,3 +47,4 @@ logs/
 tmp/
 *.tmp
 *.temp
+test_*_fix.py
