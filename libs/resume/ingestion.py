@@ -37,12 +37,17 @@ class IngestedResume:
     embedding_stats: Dict[str, Any]
     processing_time_ms: float
 
-@dataclass
-class IngestionError:
+class IngestionError(Exception):
     """Resume ingestion error details"""
-    stage: str  # parsing, chunking, embedding, persistence
-    error_message: str
-    file_path: Optional[str] = None
+    
+    def __init__(self, stage: str, error_message: str, file_path: Optional[str] = None):
+        self.stage = stage
+        self.error_message = error_message
+        self.file_path = file_path
+        super().__init__(f"Ingestion failed at {stage}: {error_message}")
+        
+    def __str__(self):
+        return f"IngestionError(stage={self.stage}, error={self.error_message}, file={self.file_path})"
 
 
 class ResumeIngestionService:
@@ -198,7 +203,7 @@ class ResumeIngestionService:
                 
                 # Stage 4: Persist to database
                 logger.info("Starting database persistence")
-                resume_id = self._persist_resume_data(parsed_resume, chunks, user_id)
+                resume_id = self._persist_resume_data(parsed_resume, chunks, user_id, str(file_path))
                 counter("resume_ingestion.persistence_success")
                 
                 end_time = time.time()
@@ -356,7 +361,7 @@ class ResumeIngestionService:
                 error_message=f"Failed to generate embeddings: {e}"
             )
     
-    def _persist_resume_data(self, parsed_resume: ParsedResume, chunks: List[Dict[str, Any]], user_id: Optional[str]) -> str:
+    def _persist_resume_data(self, parsed_resume: ParsedResume, chunks: List[Dict[str, Any]], user_id: Optional[str], source_file: Optional[str] = None) -> str:
         """Persist resume and chunks to database"""
         try:
             with timer("resume_ingestion.persistence"):
@@ -377,7 +382,7 @@ class ResumeIngestionService:
                     yoe_raw=parsed_resume.years_of_experience,
                     yoe_adjusted=parsed_resume.years_of_experience,  # Can be enhanced later
                     edu_level=parsed_resume.education_level or "",
-                    file_url=str(parsed_resume.source_file) if parsed_resume.source_file else None,
+                    file_url=source_file,
                     created_at=datetime.utcnow()
                 )
                 
