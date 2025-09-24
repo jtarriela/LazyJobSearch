@@ -156,48 +156,66 @@ class ResumeParser:
         return self._parse_text(text)
     
     def _extract_pdf_text(self, file_path: Path) -> str:
-        """Extract text from PDF file
-        
-        Note: This is a stub implementation. In production, you would use
-        a library like PyPDF2, pdfplumber, or pdfminer.six
-        """
+        """Extract text from PDF file using pdfplumber"""
         try:
-            # Stub implementation - in reality would use PDF extraction library
-            # import PyPDF2
-            # with open(file_path, 'rb') as file:
-            #     reader = PyPDF2.PdfReader(file)
-            #     text = ""
-            #     for page in reader.pages:
-            #         text += page.extract_text()
-            #     return text
+            import pdfplumber
             
-            # For now, return a placeholder to prevent blocking
-            logger.warning(f"PDF parsing not implemented - using placeholder for {file_path}")
-            return f"[PDF content placeholder for {file_path.name}]\n\nJohn Doe\nSoftware Engineer\n\nExperience:\n- Python development (3 years)\n- Web applications with Django\n- Database design\n\nSkills: Python, SQL, AWS, Docker"
+            text = ""
+            with pdfplumber.open(file_path) as pdf:
+                for page in pdf.pages:
+                    page_text = page.extract_text()
+                    if page_text:
+                        text += page_text + "\n"
             
+            if not text.strip():
+                logger.warning(f"No text extracted from PDF: {file_path}")
+                return ""
+            
+            logger.debug(f"Extracted {len(text)} characters from PDF: {file_path.name}")
+            return text.strip()
+            
+        except ImportError:
+            logger.error("pdfplumber not available - install with: pip install pdfplumber")
+            raise ResumeParseError("PDF parsing library not available")
         except Exception as e:
+            logger.error(f"Failed to extract text from PDF {file_path}: {str(e)}")
             raise ResumeParseError(f"PDF extraction failed: {str(e)}") from e
     
     def _extract_docx_text(self, file_path: Path) -> str:
-        """Extract text from DOCX file
-        
-        Note: This is a stub implementation. In production, you would use
-        python-docx library
-        """
+        """Extract text from DOCX file using python-docx"""
         try:
-            # Stub implementation - in reality would use python-docx
-            # from docx import Document
-            # document = Document(file_path)
-            # text = ""
-            # for paragraph in document.paragraphs:
-            #     text += paragraph.text + "\n"
-            # return text
+            from docx import Document
             
-            # For now, return a placeholder to prevent blocking
-            logger.warning(f"DOCX parsing not implemented - using placeholder for {file_path}")
-            return f"[DOCX content placeholder for {file_path.name}]\n\nJane Smith\nData Scientist\n\nExperience:\n- Machine learning projects (2 years)\n- Python and R programming\n- Statistical analysis\n\nSkills: Python, R, SQL, TensorFlow, pandas"
+            document = Document(file_path)
+            text = ""
             
+            # Extract text from paragraphs
+            for paragraph in document.paragraphs:
+                if paragraph.text.strip():
+                    text += paragraph.text + "\n"
+            
+            # Extract text from tables
+            for table in document.tables:
+                for row in table.rows:
+                    row_text = []
+                    for cell in row.cells:
+                        if cell.text.strip():
+                            row_text.append(cell.text.strip())
+                    if row_text:
+                        text += " | ".join(row_text) + "\n"
+            
+            if not text.strip():
+                logger.warning(f"No text extracted from DOCX: {file_path}")
+                return ""
+            
+            logger.debug(f"Extracted {len(text)} characters from DOCX: {file_path.name}")
+            return text.strip()
+            
+        except ImportError:
+            logger.error("python-docx not available - install with: pip install python-docx")
+            raise ResumeParseError("DOCX parsing library not available")
         except Exception as e:
+            logger.error(f"Failed to extract text from DOCX {file_path}: {str(e)}")
             raise ResumeParseError(f"DOCX extraction failed: {str(e)}") from e
     
     def _parse_text(self, text: str) -> ParsedResume:
