@@ -1,18 +1,21 @@
-FROM python:3.12-slim
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=on
+FROM python:3.12-slim AS base
 
 WORKDIR /app
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends build-essential libpq-dev curl postgresql-client && \
-    rm -rf /var/lib/apt/lists/*
+# System deps (add others like build-essential if needed later)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl wget ca-certificates git \
+  && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy just dependency metadata first (better layer caching)
+COPY pyproject.toml README.md ./
 
+# Install project in editable mode for live code reload via volume mount
+RUN pip install --upgrade pip && pip install -e .[dev]
+
+# Now copy the rest of the source (overwrites module with live code anyway)
 COPY . /app
 
-CMD ["bash", "-lc", "python cli/ljs.py --help"]
+# Default command (can be overridden by docker-compose)
+CMD ["bash", "scripts/init_and_hold.sh"]
