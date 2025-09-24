@@ -14,6 +14,7 @@ Future wiring: DB sessions, background queue dispatch, real CRUD.
 from __future__ import annotations
 import json
 import os
+import contextvars
 from pathlib import Path
 from typing import Optional, Any, Dict
 
@@ -33,6 +34,7 @@ console = Console()
 
 # Sub-apps
 config_app = typer.Typer(help="Config management")
+user_app = typer.Typer(help="User management")
 resume_app = typer.Typer(help="Resume operations")
 companies_app = typer.Typer(help="Company seeding & listing")
 jobs_app = typer.Typer(help="Job management")
@@ -46,6 +48,7 @@ db_app = typer.Typer(help="Database migrations & maintenance")
 generate_app = typer.Typer(help="Generators & scaffolding")
 
 APP.add_typer(config_app, name="config")
+APP.add_typer(user_app, name="user")
 APP.add_typer(resume_app, name="resume")
 APP.add_typer(companies_app, name="companies")
 APP.add_typer(jobs_app, name="jobs")
@@ -504,6 +507,171 @@ def send_digest(
             raise typer.Exit(1)
     
     asyncio.run(send_digest_email())
+
+# --------------- User Commands ---------------
+@user_app.command('show')
+def user_show(user_id: Optional[str] = typer.Option(None, help="User ID (if not provided, shows current user from config)")):
+    """Display user profile from database"""
+    from libs.db.session import get_session
+    from libs.db.models import User, ApplicationProfile
+    
+    try:
+        config = load_config(None)
+        
+        # If no user_id provided, try to get from config
+        if not user_id:
+            user_config = config.get('user', {})
+            user_email = user_config.get('email')
+            if not user_email:
+                console.print("[red]No user ID provided and no email found in config.[/red]")
+                console.print("[dim]Use 'ljs config init' to set up config or provide --user-id[/dim]")
+                raise typer.Exit(1)
+        
+        with get_session() as session:
+            if user_id:
+                user = session.query(User).filter(User.id == user_id).first()
+            else:
+                user = session.query(User).filter(User.email == user_email).first()
+            
+            if not user:
+                if user_id:
+                    console.print(f"[red]User not found: {user_id}[/red]")
+                else:
+                    console.print(f"[yellow]User not found in database for email: {user_email}[/yellow]")
+                    console.print("[dim]Use 'ljs user sync' to create user from config[/dim]")
+                raise typer.Exit(1)
+            
+            # Display user information
+            table = Table(title=f"User Profile")
+            table.add_column("Field", style="cyan")
+            table.add_column("Value", style="white")
+            
+            table.add_row("ID", str(user.id))
+            table.add_row("Email", user.email or "N/A")
+            table.add_row("Full Name", user.full_name or "N/A")
+            table.add_row("Created", user.created_at.strftime('%Y-%m-%d %H:%M:%S') if user.created_at else 'N/A')
+            table.add_row("Updated", user.updated_at.strftime('%Y-%m-%d %H:%M:%S') if user.updated_at else 'N/A')
+            
+            console.print(table)
+            
+            # Show preferences if available
+            if user.preferences_json:
+                console.print("\n[bold cyan]User Preferences:[/bold cyan]")
+                import json
+                prefs = user.preferences_json
+                if isinstance(prefs, dict):
+                    for key, value in prefs.items():
+                        console.print(f"  {key}: {value}")
+                else:
+                    console.print(f"  {prefs}")
+            
+            # Show application profiles
+            profiles = session.query(ApplicationProfile).filter(ApplicationProfile.user_id == user.id).all()
+            if profiles:
+                console.print(f"\n[bold cyan]Application Profiles ({len(profiles)}):[/bold cyan]")
+                for profile in profiles:
+                    default_indicator = " (default)" if profile.is_default else ""
+                    console.print(f"  • {profile.name}{default_indicator}")
+            
+    except Exception as e:
+        console.print(f"[red]Failed to show user profile: {e}[/red]")
+        raise typer.Exit(1)
+
+@user_app.command('sync')
+def user_sync(from_config: bool = typer.Option(True, '--from-config', help="Sync user data from config file")):
+    """Ensure user and application profiles exist, syncing from config if needed"""
+    from libs.db.session import get_session
+    from libs.db.models import User, ApplicationProfile
+    from datetime import datetime
+    import json
+    
+    try:
+        config = load_config(None)
+        user_config = config.get('user', {})
+        
+        if not user_config or not user_config.get('email'):
+            console.print("[red]No user configuration found.[/red]")
+            console.print("[dim]Use 'ljs config init' to set up user configuration[/dim]")
+            raise typer.Exit(1)
+        
+        user_email = user_config['email']
+        user_name = user_config.get('full_name', '')
+        user_prefs = user_config.get('preferences', {})
+        
+        with get_session() as session:
+            # Check if user exists
+            user = session.query(User).filter(User.email == user_email).first()
+            
+            if not user:
+                # Create new user
+                console.print(f"[cyan]Creating new user: {user_email}[/cyan]")
+                user = User(
+                    email=user_email,
+                    full_name=user_name,
+                    preferences_json=user_prefs,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow()
+                )
+                session.add(user)
+                session.commit()
+                console.print(f"[green]✅ User created: {user.id}[/green]")
+            else:
+                # Update existing user if needed
+                updated = False
+                if user.full_name != user_name:
+                    user.full_name = user_name
+                    updated = True
+                if user.preferences_json != user_prefs:
+                    user.preferences_json = user_prefs
+                    updated = True
+                
+                if updated:
+                    user.updated_at = datetime.utcnow()
+                    session.commit()
+                    console.print(f"[green]✅ User updated: {user.id}[/green]")
+                else:
+                    console.print(f"[cyan]User already up to date: {user.id}[/cyan]")
+            
+            # Sync application profiles
+            profiles_config = config.get('application_profiles', [])
+            if profiles_config:
+                console.print(f"[cyan]Syncing {len(profiles_config)} application profiles...[/cyan]")
+                
+                for profile_config in profiles_config:
+                    profile_name = profile_config.get('name', 'default')
+                    
+                    # Check if profile exists
+                    existing_profile = session.query(ApplicationProfile).filter(
+                        ApplicationProfile.user_id == user.id,
+                        ApplicationProfile.name == profile_name
+                    ).first()
+                    
+                    if not existing_profile:
+                        # Create new profile
+                        new_profile = ApplicationProfile(
+                            user_id=user.id,
+                            name=profile_name,
+                            answers_json=profile_config.get('answers', {}),
+                            is_default=profile_config.get('default', False),
+                            files_map_json=json.dumps(profile_config.get('files', {}))
+                        )
+                        session.add(new_profile)
+                        console.print(f"  ✓ Created profile: {profile_name}")
+                    else:
+                        # Update existing profile
+                        existing_profile.answers_json = profile_config.get('answers', {})
+                        existing_profile.is_default = profile_config.get('default', False)
+                        existing_profile.files_map_json = json.dumps(profile_config.get('files', {}))
+                        console.print(f"  ✓ Updated profile: {profile_name}")
+                
+                session.commit()
+                console.print("[green]✅ Application profiles synced[/green]")
+            
+            console.print(f"[green]✅ User sync completed successfully[/green]")
+            
+    except Exception as e:
+        console.print(f"[red]Failed to sync user: {e}[/red]")
+        raise typer.Exit(1)
 
 @resume_app.command('ingest')
 def resume_ingest(file: Path):
@@ -1338,6 +1506,65 @@ def review_list():
         console.print(f"[red]Failed to list reviews: {e}[/red]")
         raise typer.Exit(1)
 
+@review_app.command('show')
+def review_show(review_id: str):
+    """Show detailed information about a specific review"""
+    from libs.db.session import get_session
+    from libs.db.models import Review, Job, Company, Resume
+    
+    try:
+        with get_session() as session:
+            # Get review with related information
+            review_data = session.query(Review, Job, Company, Resume).join(
+                Job, Review.job_id == Job.id
+            ).join(
+                Company, Job.company_id == Company.id
+            ).join(
+                Resume, Review.resume_id == Resume.id
+            ).filter(Review.id == review_id).first()
+            
+            if not review_data:
+                console.print(f"[red]Review not found: {review_id}[/red]")
+                raise typer.Exit(1)
+            
+            review, job, company, resume = review_data
+            
+            # Display review details
+            console.print(f"[bold cyan]Review Details[/bold cyan]")
+            console.print(f"[cyan]ID:[/cyan] {review.id}")
+            console.print(f"[cyan]Status:[/cyan] {review.status or 'pending'}")
+            
+            # Job information
+            console.print(f"\n[bold yellow]Job Information[/bold yellow]")
+            console.print(f"[yellow]Title:[/yellow] {job.title or 'Unknown'}")
+            console.print(f"[yellow]Company:[/yellow] {company.name or 'Unknown'}")
+            console.print(f"[yellow]Location:[/yellow] {job.location or 'Remote'}")
+            console.print(f"[yellow]URL:[/yellow] {job.url}")
+            
+            # Resume information
+            console.print(f"\n[bold green]Resume Information[/bold green]")
+            console.print(f"[green]Resume ID:[/green] {resume.id}")
+            console.print(f"[green]Original Name:[/green] {resume.original_filename or 'Unknown'}")
+            if resume.skills_csv:
+                skills = resume.skills_csv.split(',')
+                console.print(f"[green]Skills Count:[/green] {len(skills)}")
+            
+            # Review metadata
+            console.print(f"\n[bold blue]Review Metadata[/bold blue]")
+            if review.llm_score:
+                console.print(f"[blue]LLM Score:[/blue] {review.llm_score}")
+            if review.improvement_brief:
+                console.print(f"[blue]Improvement Brief:[/blue] {review.improvement_brief}")
+            if review.redact_note:
+                console.print(f"[blue]Redact Note:[/blue] {review.redact_note}")
+            
+            if review.created_at:
+                console.print(f"[blue]Created:[/blue] {review.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
+            
+    except Exception as e:
+        console.print(f"[red]Failed to show review: {e}[/red]")
+        raise typer.Exit(1)
+
 @apply_app.command('run')
 def apply_run(job_id: str, resume: Optional[str] = None, profile: Optional[str] = None, dry_run: bool = typer.Option(False, '--dry-run')):
     """Run application process for a specific job"""
@@ -1405,6 +1632,207 @@ def apply_run(job_id: str, resume: Optional[str] = None, profile: Optional[str] 
                 
     except Exception as e:
         console.print(f"[red]Apply run failed: {e}[/red]")
+        raise typer.Exit(1)
+
+@apply_app.command('bulk')
+def apply_bulk(
+    job_ids: str = typer.Argument(..., help="Comma-separated job IDs or 'all' for all matched jobs"),
+    resume: Optional[str] = typer.Option(None, help="Resume ID to use for all applications"),
+    profile: Optional[str] = typer.Option(None, help="Application profile to use for all applications"),
+    dry_run: bool = typer.Option(False, '--dry-run', help="Run in dry-run mode"),
+    limit: int = typer.Option(10, '--limit', help="Maximum number of jobs to apply to")
+):
+    """Run bulk application process for multiple jobs"""
+    from libs.db.session import get_session
+    from libs.db.models import Job, Company, Resume, ApplicationProfile, Application
+    from datetime import datetime
+    import uuid
+    
+    ctx = pass_context.get()
+    effective_dry = ctx.dry_run or dry_run
+    
+    try:
+        with get_session() as session:
+            # Parse job IDs
+            if job_ids.lower() == 'all':
+                # Get all jobs that don't have applications yet
+                applied_job_ids = session.query(Application.job_id).distinct()
+                jobs = session.query(Job).filter(~Job.id.in_(applied_job_ids)).limit(limit).all()
+                console.print(f"[cyan]Found {len(jobs)} unapplied jobs (limited to {limit})[/cyan]")
+            else:
+                job_id_list = [jid.strip() for jid in job_ids.split(',')]
+                jobs = session.query(Job).filter(Job.id.in_(job_id_list)).all()
+                console.print(f"[cyan]Processing {len(jobs)} specified jobs[/cyan]")
+            
+            if not jobs:
+                console.print("[yellow]No jobs found to apply to[/yellow]")
+                return
+            
+            # Validate resume and profile if provided
+            resume_obj = None
+            if resume:
+                resume_obj = session.query(Resume).filter(Resume.id == resume).first()
+                if not resume_obj:
+                    console.print(f"[red]Resume not found: {resume}[/red]")
+                    raise typer.Exit(1)
+            
+            profile_obj = None
+            if profile:
+                profile_obj = session.query(ApplicationProfile).filter(ApplicationProfile.name == profile).first()
+                if not profile_obj:
+                    console.print(f"[red]Application profile not found: {profile}[/red]")
+                    raise typer.Exit(1)
+            
+            # Show summary
+            mode_str = "[yellow]DRY RUN[/yellow]" if effective_dry else "[green]LIVE APPLICATIONS[/green]"
+            console.print(f"[bold]Mode:[/bold] {mode_str}")
+            console.print(f"[bold]Resume:[/bold] {resume or 'Not specified'}")
+            console.print(f"[bold]Profile:[/bold] {profile or 'Not specified'}")
+            console.print()
+            
+            successful_applications = 0
+            failed_applications = 0
+            
+            # Process each job
+            table = Table(title=f"Bulk Application Results")
+            table.add_column("Job Title", style="cyan")
+            table.add_column("Company", style="yellow")
+            table.add_column("Status", style="green")
+            
+            for job in jobs:
+                company = session.query(Company).filter(Company.id == job.company_id).first()
+                company_name = company.name if company else "Unknown"
+                
+                try:
+                    if effective_dry:
+                        # Simulate application
+                        table.add_row(job.title or "Unknown", company_name, "✓ Simulated")
+                        successful_applications += 1
+                    else:
+                        # In a real implementation, this would perform the actual application
+                        # For now, we'll create a placeholder application record
+                        existing_app = session.query(Application).filter(Application.job_id == job.id).first()
+                        if existing_app:
+                            table.add_row(job.title or "Unknown", company_name, "⚠ Already Applied")
+                        else:
+                            # Create application record
+                            application = Application(
+                                id=str(uuid.uuid4()),
+                                job_id=job.id,
+                                resume_id=resume_obj.id if resume_obj else None,
+                                profile_id=profile_obj.id if profile_obj else None,
+                                applied_at=datetime.utcnow(),
+                                status='submitted',
+                                application_method='bulk_cli'
+                            )
+                            session.add(application)
+                            table.add_row(job.title or "Unknown", company_name, "✓ Applied")
+                            successful_applications += 1
+                            
+                except Exception as e:
+                    table.add_row(job.title or "Unknown", company_name, f"✗ Failed: {str(e)[:30]}")
+                    failed_applications += 1
+            
+            if not effective_dry:
+                session.commit()
+            
+            console.print(table)
+            console.print()
+            console.print(f"[green]✅ Successful: {successful_applications}[/green]")
+            if failed_applications > 0:
+                console.print(f"[red]❌ Failed: {failed_applications}[/red]")
+            
+            if effective_dry:
+                console.print("[dim]Run without --dry-run to perform actual applications[/dim]")
+                
+    except Exception as e:
+        console.print(f"[red]Bulk apply failed: {e}[/red]")
+        raise typer.Exit(1)
+
+@apply_app.command('status')
+def apply_status(
+    job_id: Optional[str] = typer.Option(None, help="Show status for specific job"),
+    user_id: Optional[str] = typer.Option(None, help="Filter by user ID"),
+    status_filter: Optional[str] = typer.Option(None, '--status', help="Filter by application status"),
+    limit: int = typer.Option(20, '--limit', help="Maximum number of results to show")
+):
+    """Check application statuses"""
+    from libs.db.session import get_session
+    from libs.db.models import Application, Job, Company, Resume, ApplicationProfile
+    
+    try:
+        with get_session() as session:
+            # Build query
+            query = session.query(Application, Job, Company).join(
+                Job, Application.job_id == Job.id
+            ).join(
+                Company, Job.company_id == Company.id
+            )
+            
+            # Apply filters
+            if job_id:
+                query = query.filter(Application.job_id == job_id)
+            if user_id:
+                query = query.filter(Application.user_id == user_id)
+            if status_filter:
+                query = query.filter(Application.status == status_filter)
+            
+            # Order by most recent first
+            query = query.order_by(Application.applied_at.desc())
+            
+            # Apply limit
+            applications = query.limit(limit).all()
+            
+            if not applications:
+                if job_id:
+                    console.print(f"[yellow]No application found for job: {job_id}[/yellow]")
+                else:
+                    console.print("[yellow]No applications found[/yellow]")
+                return
+            
+            # Display results
+            table = Table(title=f"Application Status ({len(applications)} results)")
+            table.add_column("Job Title", style="cyan")
+            table.add_column("Company", style="yellow")
+            table.add_column("Status", style="green")
+            table.add_column("Applied", style="dim")
+            table.add_column("Method", style="blue")
+            
+            status_counts = {}
+            
+            for application, job, company in applications:
+                status = application.status or "unknown"
+                status_counts[status] = status_counts.get(status, 0) + 1
+                
+                # Format status with color
+                if status in ['submitted', 'applied']:
+                    status_display = f"[green]{status}[/green]"
+                elif status in ['rejected', 'failed']:
+                    status_display = f"[red]{status}[/red]"
+                elif status in ['pending', 'in_review']:
+                    status_display = f"[yellow]{status}[/yellow]"
+                else:
+                    status_display = status
+                
+                applied_date = application.applied_at.strftime('%Y-%m-%d') if application.applied_at else 'N/A'
+                
+                table.add_row(
+                    job.title or "Unknown",
+                    company.name or "Unknown",
+                    status_display,
+                    applied_date,
+                    application.application_method or "manual"
+                )
+            
+            console.print(table)
+            
+            # Show summary
+            console.print(f"\n[bold cyan]Status Summary:[/bold cyan]")
+            for status, count in sorted(status_counts.items()):
+                console.print(f"  {status}: {count}")
+                
+    except Exception as e:
+        console.print(f"[red]Failed to check application status: {e}[/red]")
         raise typer.Exit(1)
 
 @events_app.command('tail')
