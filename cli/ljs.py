@@ -620,13 +620,191 @@ def companies_seed(file: Path, update: bool = typer.Option(False, help="Update e
 
 @companies_app.command('list')
 def companies_list():
-    with get_session() as session:
-        rows = session.query(models.Company).order_by(models.Company.name).limit(50).all()
-        table = Table(title=f'Companies ({len(rows)})')
-        table.add_column('ID'); table.add_column('Name'); table.add_column('Careers URL')
-        for r in rows:
-            table.add_row(str(r.id), r.name or '', r.careers_url or '')
+    """List companies from both database and YAML seeds"""
+    from libs.companies import YamlWriterService
+    
+    # Show YAML company seeds
+    try:
+        yaml_writer = YamlWriterService()
+        companies = yaml_writer.list_company_seeds()
+        
+        if companies:
+            table = Table(title=f'Company Seeds ({len(companies)})')
+            table.add_column('ID', style="cyan")
+            table.add_column('Name', style="white") 
+            table.add_column('Domain', style="blue")
+            table.add_column('Portal', style="green")
+            table.add_column('Created', style="dim")
+            
+            for company_id, info in companies.items():
+                table.add_row(
+                    company_id,
+                    info.get('name', 'Unknown'),
+                    info.get('domain', 'N/A'),
+                    info.get('portal_type', 'unknown'),
+                    info.get('created_at', 'N/A')[:10] if info.get('created_at') else 'N/A'  # Show date only
+                )
+            
+            console.print(table)
+        else:
+            console.print("[yellow]No company seeds found.[/yellow]")
+            console.print("[cyan]Use 'ljs companies add <name> --auto' to add companies.[/cyan]")
+    
+    except Exception as e:
+        console.print(f"[red]Error loading company seeds: {e}[/red]")
+    
+    # Also show database companies if they exist
+    try:
+        with get_session() as session:
+            rows = session.query(models.Company).order_by(models.Company.name).limit(50).all()
+            if rows:
+                console.print(f"\n")
+                db_table = Table(title=f'Database Companies ({len(rows)})')
+                db_table.add_column('ID'); db_table.add_column('Name'); db_table.add_column('Careers URL')
+                for r in rows:
+                    db_table.add_row(str(r.id), r.name or '', r.careers_url or '')
+                console.print(db_table)
+    except Exception as e:
+        # Don't show database errors if DB is not set up
+        pass
+
+@companies_app.command('add')
+def companies_add(
+    name: str = typer.Argument(..., help="Company name"),
+    domain: Optional[str] = typer.Option(None, "--domain", help="Company domain (optional, will be auto-resolved)"),
+    auto: bool = typer.Option(False, "--auto", help="Enable auto-discovery of careers page and portal"),
+    update: bool = typer.Option(False, "--update", help="Update existing company seed")
+):
+    """Add a company with optional auto-discovery"""
+    from libs.companies import CompanyAutoDiscoveryService
+    
+    ctx = pass_context.get()
+    
+    if not auto:
+        console.print("[yellow]Manual company addition not yet implemented. Use --auto for auto-discovery.[/yellow]")
+        console.print(f"[cyan]To add {name} manually, use: ljs generate company-template {name.lower().replace(' ', '-')}[/cyan]")
+        return
+    
+    console.print(f"[cyan]Starting auto-discovery for company: {name}[/cyan]")
+    if domain:
+        console.print(f"[cyan]Using provided domain: {domain}[/cyan]")
+    else:
+        console.print("[cyan]Domain will be auto-resolved[/cyan]")
+    
+    try:
+        # Initialize auto-discovery service
+        discovery_service = CompanyAutoDiscoveryService()
+        
+        # Perform discovery
+        success, message, seed = discovery_service.create_company_seed(
+            company_name=name,
+            domain=domain,
+            dry_run=ctx.dry_run,
+            overwrite=update
+        )
+        
+        if success:
+            if ctx.dry_run:
+                console.print("[green]✅ Company seed generated successfully (dry run)[/green]")
+                console.print("\n" + message)
+            else:
+                console.print("[green]✅ Company seed created successfully![/green]")
+                console.print(f"[cyan]{message}[/cyan]")
+                if seed:
+                    console.print(f"[cyan]Company ID: {seed.id}[/cyan]")
+                    console.print(f"[cyan]Portal Type: {seed.portal.type.value}[/cyan]")
+                    console.print(f"[cyan]Careers URL: {seed.careers.primary_url}[/cyan]")
+        else:
+            console.print(f"[red]❌ Failed to create company seed: {message}[/red]")
+            raise typer.Exit(1)
+            
+    except Exception as e:
+        console.print(f"[red]Error during company auto-discovery: {e}[/red]")
+        raise typer.Exit(1)
+
+@companies_app.command('select')
+def companies_select(
+    company_id: str = typer.Argument(..., help="Company slug ID to select as default")
+):
+    """Select a company as the default for operations"""
+    from libs.companies import YamlWriterService
+    
+    try:
+        yaml_writer = YamlWriterService()
+        companies = yaml_writer.list_company_seeds()
+        
+        if company_id not in companies:
+            console.print(f"[red]Company '{company_id}' not found.[/red]")
+            console.print("[cyan]Available companies:[/cyan]")
+            for cid, info in companies.items():
+                console.print(f"  • {cid}: {info.get('name', 'Unknown')}")
+            raise typer.Exit(1)
+        
+        # Store selection in config
+        config_dir = Path.home() / '.lazyjobsearch'
+        config_dir.mkdir(exist_ok=True)
+        selection_file = config_dir / 'selected_company.txt'
+        
+        with selection_file.open('w') as f:
+            f.write(company_id)
+        
+        company_info = companies[company_id]
+        console.print(f"[green]✅ Selected company: {company_info.get('name', company_id)}[/green]")
+        console.print(f"[cyan]Domain: {company_info.get('domain', 'N/A')}[/cyan]")
+        console.print(f"[cyan]Portal: {company_info.get('portal_type', 'N/A')}[/cyan]")
+        
+    except Exception as e:
+        console.print(f"[red]Error selecting company: {e}[/red]")
+        raise typer.Exit(1)
+
+@companies_app.command('show')
+def companies_show(
+    company_id: str = typer.Argument(..., help="Company slug ID to display")
+):
+    """Show detailed information about a company seed"""
+    from libs.companies import YamlWriterService
+    
+    try:
+        yaml_writer = YamlWriterService()
+        seed = yaml_writer.read_company_seed(company_id)
+        
+        if not seed:
+            console.print(f"[red]Company '{company_id}' not found.[/red]")
+            raise typer.Exit(1)
+        
+        # Display company information
+        table = Table(title=f"Company: {seed.name}")
+        table.add_column("Property", style="cyan")
+        table.add_column("Value", style="white")
+        
+        table.add_row("ID", seed.id)
+        table.add_row("Name", seed.name)
+        table.add_row("Domain", seed.domain)
+        table.add_row("Careers URL", str(seed.careers.primary_url))
+        table.add_row("Portal Type", seed.portal.type.value)
+        table.add_row("Portal Adapter", seed.portal.adapter or "N/A")
+        
+        if seed.portal.portal_config and seed.portal.portal_config.company_id:
+            table.add_row("Portal Company ID", seed.portal.portal_config.company_id)
+        
+        table.add_row("Crawler Enabled", str(seed.crawler.enabled))
+        table.add_row("Created At", seed.metadata.get('created_at', 'N/A'))
+        
+        if seed.notes:
+            table.add_row("Notes", seed.notes)
+        
         console.print(table)
+        
+        # Show confidence scores if available
+        confidence = seed.metadata.get('confidence')
+        if confidence:
+            console.print("\n[cyan]Confidence Scores:[/cyan]")
+            console.print(f"  • Careers URL: {confidence.get('careers_url', 'N/A')}")
+            console.print(f"  • Portal Detection: {confidence.get('portal_detection', 'N/A')}")
+        
+    except Exception as e:
+        console.print(f"[red]Error showing company: {e}[/red]")
+        raise typer.Exit(1)
 
 @crawl_app.command('run')
 def crawl_run(company: Optional[str] = None, all: bool = typer.Option(False, '--all')):  # noqa: A002
