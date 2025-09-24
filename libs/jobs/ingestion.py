@@ -13,7 +13,7 @@ Based on requirements from the gap analysis for job crawling and storage.
 from __future__ import annotations
 import asyncio
 from typing import List, Dict, Any, Optional, Set
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 import hashlib
 import uuid
@@ -31,11 +31,11 @@ class CrawledJob:
     url: str
     title: str
     company_name: str
+    description: str = ""
     location: Optional[str] = None
     seniority: Optional[str] = None
-    description: str = ""
-    skills: List[str] = None
-    source_metadata: Dict[str, Any] = None
+    skills: List[str] = field(default_factory=list)
+    source_metadata: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class ProcessedJob:
@@ -43,13 +43,13 @@ class ProcessedJob:
     url: str
     title: str
     company_id: str
-    location: Optional[str] = None
-    seniority: Optional[str] = None
     fulltext: str
     skills_csv: str
     fingerprint: str
-    chunks: List[Dict[str, Any]] = None
-    source_metadata: Dict[str, Any] = None
+    location: Optional[str] = None
+    seniority: Optional[str] = None
+    chunks: List[Dict[str, Any]] = field(default_factory=list)
+    source_metadata: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class IngestionStats:
@@ -60,7 +60,7 @@ class IngestionStats:
     jobs_persisted: int
     chunks_created: int
     processing_time_ms: float
-    errors: List[str] = None
+    errors: List[str] = field(default_factory=list)
 
 
 class JobIngestionService:
