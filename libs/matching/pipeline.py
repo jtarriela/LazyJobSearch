@@ -712,3 +712,138 @@ class MatchingPipeline:
 def create_matching_pipeline(session, embedding_service, config: Optional[MatchingConfig] = None) -> MatchingPipeline:
     """Factory function to create matching pipeline"""
     return MatchingPipeline(session, embedding_service, config)
+
+
+def create_adaptive_matching_pipeline(
+    session, 
+    embedding_service, 
+    config: Optional[MatchingConfig] = None,
+    use_feedback_model: bool = True
+) -> MatchingPipeline:
+    """Factory function to create adaptive matching pipeline with feedback learning
+    
+    Args:
+        session: Database session
+        embedding_service: Embedding service instance
+        config: Matching configuration
+        use_feedback_model: Whether to load and use adaptive feedback model
+        
+    Returns:
+        MatchingPipeline instance with optional adaptive learning
+    """
+    pipeline = MatchingPipeline(session, embedding_service, config)
+    
+    if use_feedback_model:
+        try:
+            # Try to load the latest feedback model from database
+            feedback_model = _load_latest_feedback_model(session)
+            if feedback_model:
+                # Add adaptive scoring capability
+                pipeline.feedback_model = feedback_model
+                
+                from .feedback import AdvancedFeatureEngineer
+                pipeline.feature_engineer = AdvancedFeatureEngineer()
+                
+                # Add adaptive ranking method
+                pipeline._original_calculate_final_scores = pipeline._calculate_final_scores
+                pipeline._calculate_final_scores = lambda candidates: _calculate_adaptive_scores(
+                    pipeline, candidates
+                )
+                
+                logger.info(f"Loaded adaptive model: {feedback_model.model_version}")
+            else:
+                logger.info("No feedback model found, using standard pipeline")
+                
+        except Exception as e:
+            logger.warning(f"Failed to load feedback model: {e}")
+    
+    return pipeline
+
+
+def _load_latest_feedback_model(session):
+    """Load the latest feedback model from database"""
+    try:
+        from libs.db.models import MatchingFeatureWeight
+        from .feedback import FeatureWeightModel
+        
+        # Get latest model
+        latest_weights = session.query(MatchingFeatureWeight).order_by(
+            MatchingFeatureWeight.created_at.desc()
+        ).first()
+        
+        if latest_weights:
+            return FeatureWeightModel(
+                weights=latest_weights.weights_json,
+                model_version=latest_weights.model_version,
+                trained_at=latest_weights.created_at,
+                metadata={}
+            )
+        return None
+        
+    except Exception as e:
+        logger.error(f"Failed to load feedback model: {e}")
+        return None
+
+
+def _calculate_adaptive_scores(pipeline: MatchingPipeline, candidates: List[JobCandidate]) -> List[JobCandidate]:
+    """Calculate scores using adaptive feedback model"""
+    try:
+        if not hasattr(pipeline, 'feedback_model') or not pipeline.feedback_model:
+            # Fallback to original scoring
+            return pipeline._original_calculate_final_scores(candidates)
+        
+        # Apply adaptive scoring to each candidate
+        for candidate in candidates:
+            try:
+                # Extract features for adaptive model
+                match_data = {
+                    'vector_score': candidate.vector_score or 0.0,
+                    'llm_score': candidate.llm_score or 0.0,
+                    'required_skills': candidate.skills or [],
+                    'candidate_skills': getattr(pipeline, '_current_resume_skills', []),
+                    'job_title': candidate.title or '',
+                    'company_name': candidate.company or '',
+                    'job_seniority': candidate.seniority or 'unknown',
+                    # Add other features as available
+                }
+                
+                # Engineer features
+                feature_vector = pipeline.feature_engineer.engineer_features(match_data)
+                feature_dict = {
+                    k: v for k, v in feature_vector.__dict__.items() 
+                    if isinstance(v, (int, float))
+                }
+                
+                # Get adaptive score
+                adaptive_score = pipeline.feedback_model.score(feature_dict)
+                candidate.adaptive_score = adaptive_score
+                candidate.final_score = adaptive_score  # Use adaptive score as final score
+                
+            except Exception as e:
+                logger.warning(f"Adaptive scoring failed for candidate {candidate.job_id}: {e}")
+                # Fallback to composite score
+                candidate.final_score = _compute_fallback_score(pipeline, candidate)
+        
+        # Sort by final score with deterministic tie-breaking
+        candidates.sort(key=lambda x: (
+            -(x.final_score or 0),  # Primary: final score (descending)
+            -(x.llm_score or 0),    # Tie-breaker 1: LLM score
+            -(x.vector_score or 0.0), # Tie-breaker 2: Vector score
+            x.job_id                # Tie-breaker 3: Job ID (deterministic)
+        ))
+        
+        return candidates
+        
+    except Exception as e:
+        logger.error(f"Adaptive scoring failed completely: {e}")
+        # Ultimate fallback
+        return pipeline._original_calculate_final_scores(candidates)
+
+
+def _compute_fallback_score(pipeline: MatchingPipeline, candidate: JobCandidate) -> float:
+    """Compute fallback composite score when adaptive scoring fails"""
+    fts_score = (candidate.fts_score or 0.0) * pipeline.config.fts_weight
+    vector_score = (candidate.vector_score or 0.0) * pipeline.config.vector_weight
+    llm_score = ((candidate.llm_score or 0.0) / 100.0) * pipeline.config.llm_weight
+    
+    return fts_score + vector_score + llm_score

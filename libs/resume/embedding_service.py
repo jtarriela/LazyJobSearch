@@ -222,32 +222,206 @@ class EmbeddingService:
         return responses[0]
     
     async def embed_batch(self, requests: List[EmbeddingRequest]) -> List[EmbeddingResponse]:
-        """Embed a batch of texts with caching and error handling"""
-        responses = []
+        """Embed a batch of texts with advanced optimization: deduplication, caching, and batching
+        
+        Implements the batch optimization algorithm from PERFORMANCE_OPTIMIZATION.md:
+        1. Deduplicate requests (common in job descriptions)
+        2. Check cache for existing embeddings  
+        3. Batch API calls for remaining texts
+        4. Reconstruct full response list maintaining order
+        """
+        if not requests:
+            return []
+            
+        start_time = time.time()
+        
+        # Step 1: Deduplicate requests while tracking original positions
+        unique_texts = {}
+        text_to_indices = {}
+        
+        for i, request in enumerate(requests):
+            text_key = f"{request.text}:{request.model}"
+            
+            if text_key not in unique_texts:
+                unique_texts[text_key] = request
+                text_to_indices[text_key] = []
+            text_to_indices[text_key].append(i)
+        
+        logger.debug(f"Deduplication: {len(requests)} requests -> {len(unique_texts)} unique texts")
+        
+        # Step 2: Check cache for unique texts
+        cached_responses = {}
         uncached_requests = []
         
-        # Check cache first
-        for request in requests:
+        for text_key, request in unique_texts.items():
             if self.cache_enabled and self.cache:
                 cached_response = self.cache.get(request.text_id)
                 if cached_response:
                     self.cache_hits += 1
-                    responses.append(cached_response)
+                    cached_responses[text_key] = cached_response
                     continue
             
-            uncached_requests.append(request)
+            uncached_requests.append((text_key, request))
         
-        # Process uncached requests
+        logger.debug(f"Cache check: {len(cached_responses)} hits, {len(uncached_requests)} misses")
+        
+        # Step 3: Process uncached requests in batches
+        new_responses = {}
         if uncached_requests:
-            new_responses = await self._process_embedding_requests(uncached_requests)
-            responses.extend(new_responses)
+            batch_responses = await self._process_embedding_requests_optimized(uncached_requests)
             
             # Cache new responses
             if self.cache_enabled and self.cache:
-                for response in new_responses:
+                for text_key, response in batch_responses.items():
                     self.cache.put(response)
+                    
+            new_responses = batch_responses
         
-        # Sort responses to match original request order
+        # Step 4: Reconstruct full response list maintaining original order
+        all_responses = {**cached_responses, **new_responses}
+        final_responses = [None] * len(requests)
+        
+        for text_key, indices in text_to_indices.items():
+            if text_key in all_responses:
+                response = all_responses[text_key]
+                for idx in indices:
+                    final_responses[idx] = response
+            else:
+                # Should not happen, but handle gracefully
+                logger.error(f"Missing response for text_key: {text_key}")
+                # Create error response
+                error_response = EmbeddingResponse(
+                    text_id=requests[indices[0]].text_id,
+                    embedding=[0.0] * 1536,  # Default embedding size
+                    model=requests[indices[0]].model,
+                    dimensions=1536,
+                    tokens_used=0,
+                    cost_cents=0.0,
+                    created_at=datetime.now()
+                )
+                for idx in indices:
+                    final_responses[idx] = error_response
+        
+        # Performance metrics
+        processing_time = time.time() - start_time
+        deduplication_ratio = len(requests) / len(unique_texts) if unique_texts else 1.0
+        cache_hit_ratio = len(cached_responses) / len(unique_texts) if unique_texts else 0.0
+        
+        logger.info(f"Batch embedding completed: {processing_time:.3f}s, "
+                   f"dedup_ratio={deduplication_ratio:.2f}, cache_hit_ratio={cache_hit_ratio:.2f}")
+        
+        return final_responses
+    
+    async def _process_embedding_requests_optimized(self, text_key_requests: List[Tuple[str, EmbeddingRequest]]) -> Dict[str, EmbeddingResponse]:
+        """Process embedding requests with optimal batching"""
+        responses = {}
+        
+        # Split into batches respecting batch_size limit
+        for i in range(0, len(text_key_requests), self.batch_size):
+            batch = text_key_requests[i:i + self.batch_size]
+            
+            try:
+                batch_texts = [req.text for _, req in batch]
+                batch_models = [req.model for _, req in batch]
+                
+                # Ensure all requests in batch use same model (API requirement)
+                if len(set(batch_models)) > 1:
+                    logger.warning("Mixed models in batch - processing individually")
+                    for text_key, request in batch:
+                        individual_responses = await self._process_single_embedding(request)
+                        responses[text_key] = individual_responses
+                else:
+                    # Process batch with single model
+                    model = batch_models[0]
+                    batch_embeddings = await self._provider.embed_texts(batch_texts, model)
+                    
+                    # Create responses
+                    for (text_key, request), embedding in zip(batch, batch_embeddings):
+                        # Estimate tokens (rough approximation: 1 token ~= 0.75 words)
+                        estimated_tokens = max(1, len(request.text.split()) * 0.75)
+                        
+                        # Estimate cost (OpenAI pricing: ~$0.0001 per 1k tokens for ada-002)
+                        cost_per_token = 0.0001 / 1000
+                        estimated_cost_cents = estimated_tokens * cost_per_token * 100
+                        
+                        response = EmbeddingResponse(
+                            text_id=request.text_id,
+                            embedding=embedding,
+                            model=model,
+                            dimensions=len(embedding),
+                            tokens_used=int(estimated_tokens),
+                            cost_cents=estimated_cost_cents,
+                            created_at=datetime.now()
+                        )
+                        
+                        responses[text_key] = response
+                        
+                        # Update service stats
+                        self.total_tokens_used += int(estimated_tokens)
+                        self.total_cost_cents += estimated_cost_cents
+                
+                self.requests_made += 1
+                
+                # Rate limiting between batches
+                if i + self.batch_size < len(text_key_requests):
+                    await asyncio.sleep(self.rate_limit_delay)
+                    
+            except Exception as e:
+                logger.error(f"Batch embedding failed: {e}")
+                
+                # Create error responses for failed batch
+                for text_key, request in batch:
+                    error_response = EmbeddingResponse(
+                        text_id=request.text_id,
+                        embedding=[0.0] * 1536,  # Default embedding size
+                        model=request.model,
+                        dimensions=1536,
+                        tokens_used=0,
+                        cost_cents=0.0,
+                        created_at=datetime.now()
+                    )
+                    responses[text_key] = error_response
+        
+        return responses
+    
+    async def _process_single_embedding(self, request: EmbeddingRequest) -> EmbeddingResponse:
+        """Process a single embedding request"""
+        try:
+            embeddings = await self._provider.embed_texts([request.text], request.model)
+            embedding = embeddings[0]
+            
+            # Estimate tokens and cost
+            estimated_tokens = max(1, len(request.text.split()) * 0.75)
+            cost_per_token = 0.0001 / 1000
+            estimated_cost_cents = estimated_tokens * cost_per_token * 100
+            
+            response = EmbeddingResponse(
+                text_id=request.text_id,
+                embedding=embedding,
+                model=request.model,
+                dimensions=len(embedding),
+                tokens_used=int(estimated_tokens),
+                cost_cents=estimated_cost_cents,
+                created_at=datetime.now()
+            )
+            
+            # Update service stats
+            self.total_tokens_used += int(estimated_tokens)
+            self.total_cost_cents += estimated_cost_cents
+            
+            return response
+            
+        except Exception as e:
+            logger.error(f"Single embedding failed: {e}")
+            return EmbeddingResponse(
+                text_id=request.text_id,
+                embedding=[0.0] * 1536,
+                model=request.model,
+                dimensions=1536,
+                tokens_used=0,
+                cost_cents=0.0,
+                created_at=datetime.now()
+            )
         responses.sort(key=lambda r: next(
             i for i, req in enumerate(requests) 
             if req.text_id == r.text_id
