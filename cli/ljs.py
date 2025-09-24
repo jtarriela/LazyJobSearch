@@ -520,9 +520,10 @@ def send_digest(
 @resume_app.command('ingest')
 def resume_ingest(file: Path):
     """Ingest a resume file into the system"""
-    from libs.resume.parser import create_resume_parser
-    from libs.resume.chunker import create_resume_chunker
-    from libs.resume.embedding_service import create_embedding_service, EmbeddingProvider
+    from libs.resume.ingestion import create_resume_ingestion_service
+    from libs.resume.embedding_service import EmbeddingProvider
+    from libs.embed.versioning import EmbeddingVersionManager
+    from libs.db.session import get_session
     import asyncio
     
     if not file.exists():
@@ -531,32 +532,30 @@ def resume_ingest(file: Path):
     
     async def ingest_resume():
         try:
-            # Parse resume
-            console.print(f"[cyan]Parsing resume: {file}[/cyan]")
-            parser = create_resume_parser()
-            parsed_resume = parser.parse_file(file)
+            # Get database session
+            session = get_session()
             
-            # Chunk resume
-            console.print("[cyan]Chunking resume content...[/cyan]")
-            chunker = create_resume_chunker()
-            chunks = chunker.chunk_resume(parsed_resume.fulltext, parsed_resume.sections)
+            # Initialize services
+            embedding_version_manager = EmbeddingVersionManager(session)
+            ingestion_service = create_resume_ingestion_service(
+                db_session=session,
+                embedding_version_manager=embedding_version_manager
+            )
             
-            # Generate embeddings
-            console.print("[cyan]Generating embeddings...[/cyan]")
-            embedding_service = create_embedding_service(provider=EmbeddingProvider.MOCK)
+            console.print(f"[cyan]Starting resume ingestion: {file}[/cyan]")
             
-            chunk_texts = [chunk.text for chunk in chunks]
-            responses = await embedding_service.embed_batch([
-                {"text": text, "model": "text-embedding-ada-002"} for text in chunk_texts
-            ])
+            # Run complete ingestion pipeline
+            result = await ingestion_service.ingest_resume_file(
+                file_path=file,
+                embedding_provider=EmbeddingProvider.MOCK
+            )
             
             console.print(f"[green]✅ Resume ingested successfully![/green]")
-            console.print(f"[cyan]Parsed {len(parsed_resume.skills)} skills: {', '.join(parsed_resume.skills[:5])}{'...' if len(parsed_resume.skills) > 5 else ''}[/cyan]")
-            console.print(f"[cyan]Created {len(chunks)} chunks with {len(responses)} embeddings[/cyan]")
-            console.print(f"[cyan]Embedding stats: {embedding_service.get_stats()}[/cyan]")
-            
-            # TODO: Save to database
-            console.print("[yellow]Note: Database persistence not implemented yet[/yellow]")
+            console.print(f"[cyan]Resume ID: {result.resume_id}[/cyan]")
+            console.print(f"[cyan]Parsed {len(result.parsed_resume.skills)} skills: {', '.join(result.parsed_resume.skills[:5])}{'...' if len(result.parsed_resume.skills) > 5 else ''}[/cyan]")
+            console.print(f"[cyan]Created {len(result.chunks)} chunks[/cyan]")
+            console.print(f"[cyan]Processing time: {result.processing_time_ms:.1f}ms[/cyan]")
+            console.print(f"[cyan]Embedding stats: {result.embedding_stats}[/cyan]")
             
         except Exception as e:
             console.print(f"[red]Resume ingestion failed: {e}[/red]")
@@ -576,29 +575,48 @@ def resume_activate(resume_id: str):
     _stub('resume.activate', resume_id=resume_id)
 
 @companies_app.command('seed')
-def companies_seed(file: Path):
+def companies_seed(file: Path, update: bool = typer.Option(False, help="Update existing companies")):
+    """Seed companies from CSV or JSON file"""
+    from libs.companies import create_company_seeding_service
+    from libs.db.session import get_session
+    import asyncio
+    
     ctx = pass_context.get()
+    
     if not file.exists():
         console.print(f"[red]Seed file not found: {file}[/red]")
         raise typer.Exit(1)
-    names = [l.strip() for l in file.read_text().splitlines() if l.strip()]
-    if not names:
-        console.print('[yellow]No company names found in seed file[/yellow]')
-        return
-    console.print(f"Seeding {len(names)} companies{' (dry-run)' if ctx.dry_run else ''}...")
-    if ctx.dry_run:
-        for n in names[:5]:
-            console.print(f"[cyan]DRY[/cyan] would insert: {n}")
-        return
-    with get_session() as session:
-        inserted = 0
-        for n in names:
-            exists = session.query(models.Company).filter(models.Company.name == n).first()
-            if exists:
-                continue
-            session.add(models.Company(name=n))
-            inserted += 1
-        console.print(f"[green]Inserted {inserted} new companies[/green]")
+    
+    async def seed_companies():
+        try:
+            session = get_session()
+            seeding_service = create_company_seeding_service(session)
+            
+            console.print(f"[cyan]Starting company seeding from: {file}[/cyan]")
+            
+            if ctx.dry_run:
+                console.print("[yellow]DRY RUN: Company seeding simulation[/yellow]")
+                # In dry run, just parse and show what would be seeded
+                return
+            
+            stats = await seeding_service.seed_companies_from_file(file, update_existing=update)
+            
+            console.print(f"[green]✅ Company seeding completed![/green]")
+            console.print(f"[cyan]Companies read: {stats.companies_read}[/cyan]")
+            console.print(f"[cyan]Companies created: {stats.companies_created}[/cyan]")
+            console.print(f"[cyan]Companies updated: {stats.companies_updated}[/cyan]")
+            console.print(f"[cyan]Companies deduplicated: {stats.companies_deduplicated}[/cyan]")
+            
+            if stats.errors:
+                console.print(f"[yellow]Errors encountered: {len(stats.errors)}[/yellow]")
+                for error in stats.errors[:5]:
+                    console.print(f"[red]  • {error}[/red]")
+                
+        except Exception as e:
+            console.print(f"[red]Company seeding failed: {e}[/red]")
+            raise typer.Exit(1)
+    
+    asyncio.run(seed_companies())
 
 @companies_app.command('list')
 def companies_list():
