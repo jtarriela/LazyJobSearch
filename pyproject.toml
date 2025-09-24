@@ -18,6 +18,9 @@ dependencies = [
   "jsonschema>=4.22",
 ]
 
+[tool.setuptools.packages.find]
+include = ["cli*", "libs*", "config*", "alembic*"]
+
 [project.optional-dependencies]
 dev = [
   "pytest>=8.2",
