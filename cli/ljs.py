@@ -294,6 +294,30 @@ def match_top(resume: Optional[str] = None, limit: int = 20, json_out: bool = ty
             table.add_row(row['job_id'], str(row['score']), row['title'])
         console.print(table)
 
+@match_app.command('test-anduril')
+def match_test_anduril():
+    """Test jdtarriela resume against Anduril career opportunities"""
+    import subprocess
+    import sys as _sys
+    result = subprocess.run([
+        _sys.executable, 'test_jdtarriela_anduril.py'
+    ], capture_output=False)
+    if result.returncode != 0:
+        console.print(f"[red]Resume matching test failed[/red]")
+        raise typer.Exit(result.returncode)
+
+@match_app.command('test-anduril-enhanced')
+def match_test_anduril_enhanced():
+    """Enhanced test of jdtarriela resume vs Anduril with detailed analysis"""
+    import subprocess
+    import sys as _sys
+    result = subprocess.run([
+        _sys.executable, 'enhanced_test_jdtarriela_anduril.py'
+    ], capture_output=False)
+    if result.returncode != 0:
+        console.print(f"[red]Enhanced resume matching test failed[/red]")
+        raise typer.Exit(result.returncode)
+
 @review_app.command('start')
 def review_start(job_id: str, resume: Optional[str] = None):
     _stub('review.start', job_id=job_id, resume=resume)
