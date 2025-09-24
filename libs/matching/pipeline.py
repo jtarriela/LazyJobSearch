@@ -116,8 +116,9 @@ class FTSSearcher:
             # Build FTS query from resume text
             fts_query = self._build_fts_query(query_text)
             
-            # SQL query using tsvector for full-text search
-            sql = """
+            # SQL query using tsvector for full-text search with proper PostgreSQL syntax
+            from sqlalchemy import text
+            sql = text("""
             SELECT 
                 j.id,
                 j.title,
@@ -127,18 +128,22 @@ class FTSSearcher:
                 j.seniority,
                 j.location,
                 j.url,
-                ts_rank(j.jd_tsv, plainto_tsquery(%s)) as fts_score
+                ts_rank(j.jd_tsv, plainto_tsquery(:fts_query)) as fts_score
             FROM jobs j
             JOIN companies c ON j.company_id = c.id
-            WHERE j.jd_tsv @@ plainto_tsquery(%s)
-            AND ts_rank(j.jd_tsv, plainto_tsquery(%s)) >= %s
+            WHERE j.jd_tsv @@ plainto_tsquery(:fts_query)
+            AND ts_rank(j.jd_tsv, plainto_tsquery(:fts_query)) >= :min_score
             ORDER BY fts_score DESC
-            LIMIT %s
-            """
+            LIMIT :limit
+            """)
             
             result = self.session.execute(
                 sql, 
-                (fts_query, fts_query, fts_query, min_score, limit)
+                {
+                    "fts_query": fts_query,
+                    "min_score": min_score,
+                    "limit": limit
+                }
             ).fetchall()
             
             candidates = []
@@ -198,13 +203,13 @@ class VectorSearcher:
         limit: int = 100,
         min_score: float = 0.5
     ) -> List[JobCandidate]:
-        """Search for similar jobs using vector similarity
+        """Search for similar jobs using pgvector cosine distance
         
         Args:
             candidates: Job candidates from FTS stage
             resume_embedding: Resume embedding vector
             limit: Maximum number of results
-            min_score: Minimum similarity threshold
+            min_score: Minimum similarity threshold (converted to distance)
             
         Returns:
             List of job candidates with vector similarity scores
@@ -212,6 +217,71 @@ class VectorSearcher:
         if not candidates:
             return []
         
+        try:
+            # Get job IDs for filtering
+            candidate_job_ids = [candidate.job_id for candidate in candidates]
+            
+            # Convert similarity threshold to distance threshold
+            # cosine_distance = 1 - cosine_similarity
+            max_distance = 1.0 - min_score
+            
+            # Use pgvector's cosine distance operator (<->) for efficient similarity search
+            from sqlalchemy import text
+            import json
+            sql = text("""
+            SELECT 
+                jc.job_id,
+                1 - (jc.embedding <-> :resume_vector) as similarity_score,
+                jc.embedding <-> :resume_vector as distance
+            FROM job_chunks jc
+            WHERE jc.job_id = ANY(:job_ids)
+            AND jc.embedding IS NOT NULL
+            AND jc.embedding <-> :resume_vector <= :max_distance
+            ORDER BY jc.embedding <-> :resume_vector
+            LIMIT :limit
+            """)
+            
+            # Execute query with pgvector distance search
+            result = self.session.execute(
+                sql,
+                {
+                    "resume_vector": json.dumps(resume_embedding),
+                    "job_ids": candidate_job_ids,
+                    "max_distance": max_distance,
+                    "limit": limit
+                }
+            ).fetchall()
+            
+            # Map results back to candidates
+            job_scores = {str(row.job_id): row.similarity_score for row in result}
+            
+            scored_candidates = []
+            for candidate in candidates:
+                if candidate.job_id in job_scores:
+                    candidate.vector_score = job_scores[candidate.job_id]
+                    candidate.metadata['stage'] = 'vector'
+                    scored_candidates.append(candidate)
+            
+            # Sort by vector score (highest first) and limit
+            scored_candidates.sort(key=lambda x: x.vector_score or 0, reverse=True)
+            result = scored_candidates[:limit]
+            
+            logger.info(f"Vector search found {len(result)} candidates with similarity >= {min_score}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"pgvector search failed: {e}")
+            # Fallback to manual cosine similarity calculation
+            return await self._fallback_cosine_similarity(candidates, resume_embedding, limit, min_score)
+    
+    async def _fallback_cosine_similarity(
+        self,
+        candidates: List[JobCandidate],
+        resume_embedding: List[float],
+        limit: int,
+        min_score: float
+    ) -> List[JobCandidate]:
+        """Fallback to manual cosine similarity calculation when pgvector fails"""
         try:
             # Get embeddings for job descriptions (from cache or generate)
             job_embeddings = await self._get_job_embeddings(candidates)
@@ -225,22 +295,52 @@ class VectorSearcher:
                     
                     if similarity >= min_score:
                         candidate.vector_score = similarity
-                        candidate.metadata['stage'] = 'vector'
+                        candidate.metadata['stage'] = 'vector_fallback'
                         scored_candidates.append(candidate)
             
             # Sort by vector score and limit
             scored_candidates.sort(key=lambda x: x.vector_score or 0, reverse=True)
-            result = scored_candidates[:limit]
-            
-            logger.info(f"Vector search filtered to {len(result)} candidates")
-            return result
-            
+            return scored_candidates[:limit]
         except Exception as e:
-            logger.error(f"Vector search failed: {e}")
-            return candidates[:limit]  # Fallback to FTS results
+            logger.error(f"Fallback cosine similarity also failed: {e}")
+            return candidates[:limit]  # Ultimate fallback to FTS results
     
     async def _get_job_embeddings(self, candidates: List[JobCandidate]) -> List[Optional[List[float]]]:
-        """Get embeddings for job descriptions"""
+        """Get embeddings for job descriptions with caching support"""
+        embeddings = []
+        
+        # Check if embeddings already exist in database
+        candidate_job_ids = [candidate.job_id for candidate in candidates]
+        
+        try:
+            from sqlalchemy import text
+            sql = text("""
+            SELECT job_id, embedding 
+            FROM job_chunks 
+            WHERE job_id = ANY(:job_ids)
+            AND embedding IS NOT NULL
+            """)
+            
+            result = self.session.execute(sql, {"job_ids": candidate_job_ids}).fetchall()
+            existing_embeddings = {str(row.job_id): row.embedding for row in result}
+            
+            # Return cached embeddings or None for missing ones
+            for candidate in candidates:
+                if candidate.job_id in existing_embeddings:
+                    embeddings.append(existing_embeddings[candidate.job_id])
+                else:
+                    # Prepare embedding request for missing embeddings
+                    embeddings.append(None)
+                    
+        except Exception as e:
+            logger.warning(f"Could not retrieve cached job embeddings: {e}")
+            # Fallback to generating embeddings fresh
+            embeddings = await self._generate_job_embeddings(candidates)
+        
+        return embeddings
+    
+    async def _generate_job_embeddings(self, candidates: List[JobCandidate]) -> List[Optional[List[float]]]:
+        """Generate fresh embeddings for job descriptions"""
         embeddings = []
         
         # Prepare embedding requests
@@ -263,7 +363,7 @@ class VectorSearcher:
             responses = await self.embedding_service.embed_batch(embedding_requests)
             embeddings = [resp.embedding for resp in responses]
         except Exception as e:
-            logger.error(f"Failed to get job embeddings: {e}")
+            logger.error(f"Failed to generate job embeddings: {e}")
             embeddings = [None] * len(candidates)
         
         return embeddings
@@ -394,22 +494,68 @@ Respond with JSON in this exact format:
         return prompt
     
     async def _mock_llm_call(self, prompt: str) -> Tuple[int, str, float]:
-        """Mock LLM call for testing (replace with actual LLM integration)"""
+        """Make LLM call for job-resume scoring
+        
+        TODO: Replace with configurable LLM provider (OpenAI, Anthropic, etc.)
+        Currently implemented as a mock for development/testing
+        """
         # Simulate processing time
         await asyncio.sleep(0.05)
         
-        # Generate mock score based on prompt content
+        # For now, return mock scores but with more realistic variation
+        # In production, this would make actual API calls to OpenAI/Anthropic
         import hashlib
+        import re
+        
+        # Extract some basic features from the prompt to make scoring less random
+        prompt_lower = prompt.lower()
+        
+        # Look for skill matches (basic heuristic)
+        skill_keywords = ['python', 'javascript', 'java', 'react', 'sql', 'aws', 'docker', 'kubernetes']
+        matched_skills = sum(1 for skill in skill_keywords if skill in prompt_lower)
+        
+        # Look for experience level indicators
+        senior_indicators = ['senior', '5+', 'lead', 'principal', 'architect']
+        junior_indicators = ['junior', 'entry', '0-2', 'intern']
+        
+        is_senior_role = any(indicator in prompt_lower for indicator in senior_indicators)
+        is_junior_role = any(indicator in prompt_lower for indicator in junior_indicators)
+        
+        # Base score on skill matches
+        base_score = min(50 + (matched_skills * 10), 90)
+        
+        # Adjust for experience level mismatch
+        if 'experience: 0' in prompt_lower and is_senior_role:
+            base_score = max(base_score - 30, 20)  # Penalize junior candidate for senior role
+        elif 'experience: ' in prompt_lower:
+            exp_match = re.search(r'experience: (\d+)', prompt_lower)
+            if exp_match:
+                years = int(exp_match.group(1))
+                if years >= 5 and is_senior_role:
+                    base_score = min(base_score + 10, 95)  # Bonus for senior candidate for senior role
+                elif years < 2 and is_junior_role:
+                    base_score = min(base_score + 5, 90)   # Small bonus for appropriate level
+        
+        # Add some deterministic variation based on content hash
         prompt_hash = hashlib.md5(prompt.encode()).hexdigest()
-        score = int(prompt_hash[:2], 16) % 100  # Score 0-99
+        hash_variation = int(prompt_hash[:2], 16) % 20 - 10  # -10 to +9
         
-        # Mock reasoning
-        reasoning = f"Mock evaluation: Generated score {score} based on job-candidate alignment factors."
+        final_score = max(0, min(100, base_score + hash_variation))
         
-        # Mock cost (roughly $0.002 per request)
-        cost_cents = 0.2
+        # Generate more realistic reasoning
+        reasoning = f"Skills alignment: {matched_skills}/8 key skills found. "
+        if is_senior_role:
+            reasoning += "Senior-level role identified. "
+        elif is_junior_role:
+            reasoning += "Entry-level role identified. "
+            
+        reasoning += f"Overall compatibility score: {final_score}/100."
         
-        return score, reasoning, cost_cents
+        # Mock cost based on typical OpenAI pricing (~$0.002 per 1K tokens)
+        estimated_tokens = len(prompt.split()) * 1.3  # Rough token estimate
+        cost_cents = (estimated_tokens / 1000) * 0.2  # $0.002 per 1K tokens
+        
+        return final_score, reasoning, cost_cents
 
 class MatchingPipeline:
     """Main matching pipeline orchestrator"""
