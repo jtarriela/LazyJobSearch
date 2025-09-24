@@ -16,6 +16,7 @@ import json
 import os
 from pathlib import Path
 from typing import Optional, Any, Dict
+from contextvars import ContextVar
 
 import typer
 import yaml
@@ -130,7 +131,8 @@ class Context:
         self.dry_run: bool = True
         self.logger: Logger | None = None
 
-pass_context = typer.ContextVar("ljs_ctx")
+from contextvars import ContextVar
+pass_context: ContextVar[Context] = ContextVar("ljs_ctx")
 
 
 @APP.callback()
