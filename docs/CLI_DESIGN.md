@@ -15,46 +15,69 @@ While a web frontend is planned (see `ARCHITECTURE.md` Section 20), initial deve
 4. Fail fast on misconfiguration with rich diagnostics (config validation schema).
 5. No silent network or LLM calls—always log model + token summary.
 
-## Command Tree (Draft)
+## Command Tree (Current Implementation Status)
 ```
 ljs (lazyjobsearch)
   config
-    init                 # Write example config to ~/.lazyjobsearch/config.yaml
-    validate             # Validate current config file
-  user
-    show                 # Display user profile (from DB)
-    sync --from-config   # Ensure user + application profiles exist
+    init ✅               # Write example config to ~/.lazyjobsearch/config.yaml
+    show ✅               # Show current config
+    validate ✅           # Validate current config file
+  user                   # ❌ MISSING - No user management implemented
+    show ❌               # Display user profile (from DB)
+    sync ❌               # Ensure user + application profiles exist
   resume
-    ingest <file>        # Parse, chunk, embed a resume file
-    list                 # List resume versions
-    show <resume_id>
-    activate <resume_id> # Mark a version active
+    ingest ✅             # Parse, chunk, embed a resume file
+    list ✅               # List resume versions
+    show ✅               # Show resume details
+    activate ✅           # Mark a resume as active
+    parse ➕              # Parse resume file and extract data (NEW)
+    chunk ➕              # Chunk resume content (NEW)
   companies
-    seed --file seeds.txt
-    list
+    seed ✅               # Seed companies from CSV/JSON file
+    list ✅               # List companies
+    add ➕                # Add single company (NEW)
+    select ➕             # Select companies by criteria (NEW)  
+    show ➕               # Show specific company details (NEW)
+  jobs
+    add ➕                # Add job manually (NEW)
+    list ➕               # List jobs from database (NEW)
   crawl
-    run [--company <id>|--all]
-    status
+    run ✅               # Run crawler for companies
+    discover ➕          # Discover careers pages (NEW)
+    status ✅            # Show crawl status
   match
-    run [--resume <id>] [--limit 200]
-    top [--resume <id>] [--limit 20]
+    run ✅               # Run matching pipeline
+    top ✅               # Show top matches
+    test-anduril ➕      # Test Anduril-specific matching (NEW)
+    test-anduril-enhanced ➕ # Enhanced Anduril test (NEW)
   review
-    start <job_id> [--resume <id>]       # iteration=1
-    rewrite <review_id> [--mode auto|manual --file new.pdf]
-    next <review_id>                     # request next iteration
-    satisfy <review_id>
-    show <review_id>
+    start ✅             # Start review process (iteration=1)
+    rewrite ⚠️           # PLACEHOLDER - Generate rewrite suggestions
+    next ⚠️              # PLACEHOLDER - Next iteration
+    satisfy ✅           # Mark review as satisfied
+    list ➕              # List reviews (NEW, replaces show)
   apply
-    run <job_id> [--resume <id>] [--profile <name>] [--dry-run]
-    bulk --jobs job_ids.txt [--filter score>=80]
-    status <application_id>
+    run ✅               # Apply to jobs
+    bulk ❌              # MISSING - Bulk application operations
+    status ❌            # MISSING - Application status checking
   events
-    tail [--since 10m]
+    tail ✅              # Stream events
   schema
-    validate                             # Run markdown ↔ model validator
+    validate ✅          # Run markdown ↔ model validator
   db
-    migrate                              # Alembic upgrade head
+    migrate ✅           # Alembic upgrade head
+    init-db ➕           # Initialize database (NEW)
+  generate               # ➕ NEW COMMAND GROUP
+    company-template ➕   # Scaffold company portal template
+  notifications          # ➕ NEW COMMAND GROUP  
+    digest ➕            # Send digest emails
 ```
+
+**Legend:**
+- ✅ Fully implemented
+- ⚠️ Partial implementation / placeholder
+- ❌ Missing / not implemented
+- ➕ New commands not in original design
 
 ## Example Flows
 ### 1. First-Time Setup
