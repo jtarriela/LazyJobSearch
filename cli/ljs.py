@@ -273,7 +273,77 @@ def companies_list():
 
 @crawl_app.command('run')
 def crawl_run(company: Optional[str] = None, all: bool = typer.Option(False, '--all')):  # noqa: A002
-    _stub('crawl.run', company=company, all=all)
+    """Run crawler for specific company or all companies"""
+    from libs.scraper.crawl_worker import CrawlWorker
+    
+    try:
+        worker = CrawlWorker()
+        
+        if all:
+            console.print("[cyan]Crawling all companies...[/cyan]")
+            results = worker.crawl_all_companies()
+            
+            # Display results table
+            table = Table(title="Crawl Results")
+            table.add_column("Company")
+            table.add_column("Status")
+            table.add_column("Jobs Found")
+            table.add_column("Jobs Ingested")
+            table.add_column("Careers URL")
+            
+            for result in results:
+                status = result.get('status', 'error')
+                status_color = 'green' if status == 'success' else 'red'
+                
+                table.add_row(
+                    result.get('company', 'Unknown'),
+                    f"[{status_color}]{status}[/{status_color}]",
+                    str(result.get('jobs_found', 0)),
+                    str(result.get('jobs_ingested', 0)),
+                    result.get('careers_url', result.get('error', ''))
+                )
+            
+            console.print(table)
+            
+        elif company:
+            console.print(f"[cyan]Crawling company: {company}[/cyan]")
+            result = worker.crawl_company(company)
+            
+            if 'error' in result:
+                console.print(f"[red]Error: {result['error']}[/red]")
+                raise typer.Exit(1)
+            else:
+                console.print(f"[green]✅ Successfully crawled {company}[/green]")
+                console.print(f"Jobs found: {result['jobs_found']}")
+                console.print(f"Jobs ingested: {result['jobs_ingested']}")
+                console.print(f"Careers URL: {result['careers_url']}")
+        else:
+            console.print("[red]Please specify --company <name> or --all[/red]")
+            raise typer.Exit(1)
+            
+    except Exception as e:
+        console.print(f"[red]Crawl failed: {e}[/red]")
+        raise typer.Exit(1)
+
+@crawl_app.command('discover')
+def crawl_discover(url: str):
+    """Discover careers page URL for a given company website"""
+    from libs.scraper.careers_discovery import CareersDiscoveryService
+    
+    try:
+        console.print(f"[cyan]Discovering careers page for: {url}[/cyan]")
+        
+        discovery_service = CareersDiscoveryService()
+        careers_url = discovery_service.discover_careers_url(url)
+        
+        if careers_url:
+            console.print(f"[green]✅ Found careers page: {careers_url}[/green]")
+        else:
+            console.print(f"[yellow]⚠️  No careers page found for {url}[/yellow]")
+            
+    except Exception as e:
+        console.print(f"[red]Discovery failed: {e}[/red]")
+        raise typer.Exit(1)
 
 @match_app.command('run')
 def match_run(resume: Optional[str] = None, limit: int = 200):
