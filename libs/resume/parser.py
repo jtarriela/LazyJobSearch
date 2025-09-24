@@ -1,7 +1,8 @@
 """Resume parser for PDF and DOCX files
 
-Handles file upload, text extraction, and basic resume section parsing.
-Supports both PDF and Word document formats with error handling.
+Handles file upload, text extraction, and LLM-powered resume parsing.
+Supports both PDF and Word document formats with LLM integration for better accuracy.
+Falls back to regex-based parsing if LLM parsing fails.
 """
 from __future__ import annotations
 import logging
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Union
 import tempfile
 import os
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,21 @@ class ParsedResume:
     contact_info: Dict[str, str]
     word_count: int
     char_count: int
+    # New fields for enhanced parsing
+    full_name: Optional[str] = None
+    experience: List[Dict[str, str]] = None
+    education: List[Dict[str, str]] = None
+    certifications: List[str] = None
+    summary: Optional[str] = None
+    parsing_method: str = "regex"  # "llm" or "regex"
+    
+    def __post_init__(self):
+        if self.experience is None:
+            self.experience = []
+        if self.education is None:
+            self.education = []
+        if self.certifications is None:
+            self.certifications = []
 
 class ResumeParseError(Exception):
     """Custom exception for resume parsing errors"""
@@ -92,10 +109,20 @@ class ResumeParser:
         'tensorflow', 'pytorch', 'scikit-learn'
     }
     
-    def __init__(self):
-        """Initialize the resume parser"""
+    def __init__(self, use_llm: bool = True):
+        """Initialize the resume parser
+        
+        Args:
+            use_llm: Whether to use LLM for parsing (falls back to regex if False or LLM fails)
+        """
+        self.use_llm = use_llm
         self._compiled_patterns = {}
         self._compile_section_patterns()
+        
+        # Initialize LLM service if enabled
+        if self.use_llm:
+            from .llm_service import create_llm_service, LLMProvider
+            self.llm_service = create_llm_service(provider=LLMProvider.MOCK)
     
     def _compile_section_patterns(self):
         """Pre-compile regex patterns for efficiency"""
@@ -219,35 +246,105 @@ class ResumeParser:
             raise ResumeParseError(f"DOCX extraction failed: {str(e)}") from e
     
     def _parse_text(self, text: str) -> ParsedResume:
-        """Parse raw resume text into structured data"""
+        """Parse raw resume text into structured data using LLM or regex fallback"""
         
         # Clean and normalize text
         normalized_text = self._normalize_text(text)
         
-        # Extract sections
-        sections = self._extract_sections(normalized_text)
+        # Try LLM parsing first if enabled
+        if self.use_llm:
+            try:
+                return asyncio.run(self._parse_with_llm(normalized_text))
+            except Exception as e:
+                logger.warning(f"LLM parsing failed, falling back to regex parsing: {e}")
         
-        # Extract skills
-        skills = self._extract_skills(normalized_text)
+        # Fallback to regex-based parsing
+        return self._parse_with_regex(normalized_text)
+    
+    async def _parse_with_llm(self, text: str) -> ParsedResume:
+        """Parse resume using LLM service"""
+        logger.info("Parsing resume with LLM...")
         
-        # Extract years of experience
-        yoe = self._extract_years_of_experience(normalized_text)
+        # Get structured data from LLM
+        llm_data, responses = await self.llm_service.parse_resume(text)
         
-        # Extract education level
-        education_level = self._extract_education_level(normalized_text)
+        # Also extract sections using regex for backward compatibility
+        sections = self._extract_sections(text)
         
-        # Extract contact information
-        contact_info = self._extract_contact_info(normalized_text)
+        # Convert LLM data to ParsedResume format
+        contact_info = {}
+        if llm_data.email:
+            contact_info['email'] = llm_data.email
+        if llm_data.phone:
+            contact_info['phone'] = llm_data.phone
+        if llm_data.linkedin:
+            contact_info['linkedin'] = llm_data.linkedin
+        
+        # Convert experience list to simple format if needed
+        experience_list = []
+        for exp in llm_data.experience:
+            if isinstance(exp, dict):
+                experience_list.append(exp)
+        
+        # Convert education list
+        education_list = []
+        for edu in llm_data.education:
+            if isinstance(edu, dict):
+                education_list.append(edu)
+        
+        # Log parsing success
+        missing_fields = llm_data.get_missing_fields()
+        if missing_fields:
+            logger.warning(f"LLM parsing completed but missing some fields: {missing_fields}")
+        else:
+            logger.info("LLM parsing completed successfully with all required fields")
         
         return ParsedResume(
-            fulltext=normalized_text,
+            fulltext=text,
+            sections=sections,
+            skills=llm_data.skills or [],
+            years_of_experience=llm_data.years_of_experience,
+            education_level=llm_data.education_level,
+            contact_info=contact_info,
+            word_count=len(text.split()),
+            char_count=len(text),
+            full_name=llm_data.full_name,
+            experience=experience_list,
+            education=education_list,
+            certifications=llm_data.certifications or [],
+            summary=llm_data.summary,
+            parsing_method="llm"
+        )
+    
+    def _parse_with_regex(self, text: str) -> ParsedResume:
+        """Parse resume using regex-based extraction (original method)"""
+        logger.info("Parsing resume with regex-based method...")
+        
+        # Extract sections
+        sections = self._extract_sections(text)
+        
+        # Extract skills
+        skills = self._extract_skills(text)
+        
+        # Extract years of experience
+        yoe = self._extract_years_of_experience(text)
+        
+        # Extract education level
+        education_level = self._extract_education_level(text)
+        
+        # Extract contact information
+        contact_info = self._extract_contact_info(text)
+        
+        return ParsedResume(
+            fulltext=text,
             sections=sections,
             skills=skills,
             years_of_experience=yoe,
             education_level=education_level,
             contact_info=contact_info,
-            word_count=len(normalized_text.split()),
-            char_count=len(normalized_text)
+            word_count=len(text.split()),
+            char_count=len(text),
+            parsing_method="regex"
         )
     
     def _normalize_text(self, text: str) -> str:
@@ -400,6 +497,10 @@ class ResumeParser:
         
         return contact
 
-def create_resume_parser() -> ResumeParser:
-    """Factory function to create a configured resume parser"""
-    return ResumeParser()
+def create_resume_parser(use_llm: bool = True) -> ResumeParser:
+    """Factory function to create a configured resume parser
+    
+    Args:
+        use_llm: Whether to enable LLM-based parsing (default: True)
+    """
+    return ResumeParser(use_llm=use_llm)

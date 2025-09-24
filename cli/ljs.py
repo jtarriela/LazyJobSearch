@@ -228,7 +228,8 @@ def generate_company_template(name: str = typer.Argument(..., help='Company slug
 @resume_app.command('parse')
 def resume_parse(
     file: Path,
-    output_format: str = typer.Option("json", help="Output format (json|yaml)")
+    output_format: str = typer.Option("json", help="Output format (json|yaml)"),
+    use_llm: bool = typer.Option(True, help="Use LLM for parsing (default: True)")
 ):
     """Parse a resume file and extract structured data"""
     from libs.resume.parser import create_resume_parser
@@ -238,10 +239,22 @@ def resume_parse(
         raise typer.Exit(1)
     
     try:
-        parser = create_resume_parser()
+        parser = create_resume_parser(use_llm=use_llm)
         result = parser.parse_file(file)
         
-        console.print(f"[green]Successfully parsed resume: {file}[/green]")
+        parsing_method = "LLM" if result.parsing_method == "llm" else "Regex"
+        console.print(f"[green]Successfully parsed resume: {file} (using {parsing_method})[/green]")
+        
+        # Enhanced output for LLM parsing
+        if result.parsing_method == "llm":
+            console.print(f"[cyan]Full name:[/cyan] {result.full_name or 'Not detected'}")
+            console.print(f"[cyan]Email:[/cyan] {result.contact_info.get('email', 'Not detected')}")
+            console.print(f"[cyan]Phone:[/cyan] {result.contact_info.get('phone', 'Not detected')}")
+            console.print(f"[cyan]Summary:[/cyan] {result.summary or 'Not detected'}")
+            console.print(f"[cyan]Experience entries:[/cyan] {len(result.experience)}")
+            console.print(f"[cyan]Education entries:[/cyan] {len(result.education)}")
+            console.print(f"[cyan]Certifications:[/cyan] {len(result.certifications)}")
+        
         console.print(f"[cyan]Skills found:[/cyan] {', '.join(result.skills)}")
         console.print(f"[cyan]Years of experience:[/cyan] {result.years_of_experience or 'Not detected'}")
         console.print(f"[cyan]Education level:[/cyan] {result.education_level or 'Not detected'}")
@@ -260,7 +273,8 @@ def resume_parse(
 def resume_chunk(
     file: Path,
     strategy: str = typer.Option("hybrid", help="Chunking strategy (section|sliding|semantic|hybrid)"),
-    max_tokens: int = typer.Option(500, help="Maximum tokens per chunk")
+    max_tokens: int = typer.Option(500, help="Maximum tokens per chunk"),
+    use_llm: bool = typer.Option(True, help="Use LLM for parsing (default: True)")
 ):
     """Chunk a resume for embedding and search"""
     from libs.resume.parser import create_resume_parser
@@ -272,7 +286,7 @@ def resume_chunk(
     
     try:
         # Parse resume first
-        parser = create_resume_parser()
+        parser = create_resume_parser(use_llm=use_llm)
         parsed_resume = parser.parse_file(file)
         
         # Configure chunker
@@ -398,7 +412,8 @@ def review_start(
     resume_file: Optional[Path] = typer.Option(None, help="Resume file to review"),
     job_title: str = typer.Option("Software Engineer", help="Target job title"),
     company: str = typer.Option("TechCorp", help="Target company"),
-    max_iterations: int = typer.Option(3, help="Maximum review iterations")
+    max_iterations: int = typer.Option(3, help="Maximum review iterations"),
+    use_llm: bool = typer.Option(True, help="Use LLM for parsing (default: True)")
 ):
     """Start resume review and improvement process"""
     import asyncio
@@ -412,7 +427,7 @@ def review_start(
     async def run_review():
         try:
             # Parse resume
-            parser = create_resume_parser()
+            parser = create_resume_parser(use_llm=use_llm)
             parsed_resume = parser.parse_file(resume_file)
             
             # Create review manager
