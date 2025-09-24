@@ -128,6 +128,9 @@ class ResumeParser:
                 fulltext = self._extract_pdf_text(file_path)
             elif file_path.suffix.lower() in ['.docx', '.doc']:
                 fulltext = self._extract_docx_text(file_path)
+            elif file_path.suffix.lower() in ['.txt']:
+                # Support plain text files for testing
+                fulltext = file_path.read_text(encoding='utf-8')
             else:
                 raise ResumeParseError(f"Unsupported file type: {file_path.suffix}")
             

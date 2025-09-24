@@ -221,9 +221,348 @@ def _stub(name: str, **kwargs):
     console.print(f"[cyan]{mode} {name}[/cyan] {kwargs}")
 
 
+@resume_app.command('parse')
+def resume_parse(
+    file: Path,
+    output_format: str = typer.Option("json", help="Output format (json|yaml)")
+):
+    """Parse a resume file and extract structured data"""
+    from libs.resume.parser import create_resume_parser
+    
+    if not file.exists():
+        console.print(f"[red]Resume file not found: {file}[/red]")
+        raise typer.Exit(1)
+    
+    try:
+        parser = create_resume_parser()
+        result = parser.parse_file(file)
+        
+        console.print(f"[green]Successfully parsed resume: {file}[/green]")
+        console.print(f"[cyan]Skills found:[/cyan] {', '.join(result.skills)}")
+        console.print(f"[cyan]Years of experience:[/cyan] {result.years_of_experience or 'Not detected'}")
+        console.print(f"[cyan]Education level:[/cyan] {result.education_level or 'Not detected'}")
+        console.print(f"[cyan]Word count:[/cyan] {result.word_count}")
+        
+        if output_format == "json":
+            import json
+            from dataclasses import asdict
+            print(json.dumps(asdict(result), indent=2, default=str))
+        
+    except Exception as e:
+        console.print(f"[red]Failed to parse resume: {e}[/red]")
+        raise typer.Exit(1)
+
+@resume_app.command('chunk')
+def resume_chunk(
+    file: Path,
+    strategy: str = typer.Option("hybrid", help="Chunking strategy (section|sliding|semantic|hybrid)"),
+    max_tokens: int = typer.Option(500, help="Maximum tokens per chunk")
+):
+    """Chunk a resume for embedding and search"""
+    from libs.resume.parser import create_resume_parser
+    from libs.resume.chunker import create_resume_chunker, ChunkingConfig, ChunkStrategy
+    
+    if not file.exists():
+        console.print(f"[red]Resume file not found: {file}[/red]")
+        raise typer.Exit(1)
+    
+    try:
+        # Parse resume first
+        parser = create_resume_parser()
+        parsed_resume = parser.parse_file(file)
+        
+        # Configure chunker
+        strategy_map = {
+            "section": ChunkStrategy.SECTION_BASED,
+            "sliding": ChunkStrategy.SLIDING_WINDOW, 
+            "semantic": ChunkStrategy.SEMANTIC,
+            "hybrid": ChunkStrategy.HYBRID
+        }
+        
+        config = ChunkingConfig(
+            max_tokens=max_tokens,
+            strategy=strategy_map.get(strategy, ChunkStrategy.HYBRID)
+        )
+        
+        chunker = create_resume_chunker(config)
+        chunks = chunker.chunk_resume(parsed_resume.fulltext, parsed_resume.sections)
+        
+        console.print(f"[green]Created {len(chunks)} chunks using {strategy} strategy[/green]")
+        
+        # Display chunk summary
+        table = Table(title="Resume Chunks")
+        table.add_column("Chunk ID")
+        table.add_column("Section")
+        table.add_column("Tokens")
+        table.add_column("Preview")
+        
+        for chunk in chunks:
+            preview = chunk.text[:100] + "..." if len(chunk.text) > 100 else chunk.text
+            table.add_row(
+                chunk.chunk_id,
+                chunk.section or "N/A",
+                str(chunk.token_count),
+                preview
+            )
+        
+        console.print(table)
+        
+    except Exception as e:
+        console.print(f"[red]Failed to chunk resume: {e}[/red]")
+        raise typer.Exit(1)
+
+@match_app.command('run')
+def match_run(
+    resume_file: Optional[Path] = typer.Option(None, help="Resume file to match"),
+    resume_id: Optional[str] = typer.Option(None, help="Resume ID from database"),
+    limit: int = typer.Option(20, help="Maximum matches to return")
+):
+    """Run matching pipeline for a resume"""
+    import asyncio
+    from libs.resume.parser import create_resume_parser
+    from libs.resume.embedding_service import create_embedding_service, EmbeddingProvider
+    from libs.matching.pipeline import create_matching_pipeline, ResumeProfile, MatchingConfig
+    
+    # Validate inputs
+    if not resume_file and not resume_id:
+        console.print("[red]Must provide either --resume-file or --resume-id[/red]")
+        raise typer.Exit(1)
+    
+    async def run_matching():
+        try:
+            # Create services
+            session = get_session()
+            embedding_service = create_embedding_service(provider=EmbeddingProvider.MOCK)
+            config = MatchingConfig(llm_limit=limit)
+            pipeline = create_matching_pipeline(session, embedding_service, config)
+            
+            # Prepare resume profile
+            if resume_file:
+                if not resume_file.exists():
+                    console.print(f"[red]Resume file not found: {resume_file}[/red]")
+                    return
+                
+                # Parse resume file
+                parser = create_resume_parser()
+                parsed_resume = parser.parse_file(resume_file)
+                
+                profile = ResumeProfile(
+                    resume_id=f"file_{resume_file.stem}",
+                    fulltext=parsed_resume.fulltext,
+                    skills=parsed_resume.skills,
+                    years_experience=parsed_resume.years_of_experience,
+                    education_level=parsed_resume.education_level
+                )
+            else:
+                # TODO: Load from database
+                console.print("[yellow]Database resume loading not implemented yet[/yellow]")
+                return
+            
+            console.print(f"[cyan]Running matching pipeline for resume...[/cyan]")
+            
+            # Run matching
+            result = await pipeline.match_resume_to_jobs(profile)
+            
+            # Display results
+            console.print(f"[green]Matching completed in {result.processing_time_seconds:.2f}s[/green]")
+            console.print(f"[cyan]Cost: ${result.total_cost_cents/100:.3f}[/cyan]")
+            console.print(f"[cyan]Stages completed: {[s.value for s in result.stages_completed]}[/cyan]")
+            
+            if result.matches:
+                table = Table(title=f"Top {len(result.matches)} Matches")
+                table.add_column("Rank")
+                table.add_column("Job Title")
+                table.add_column("Company")
+                table.add_column("LLM Score")
+                table.add_column("Action")
+                table.add_column("Reasoning")
+                
+                for i, match in enumerate(result.matches[:10], 1):
+                    score_color = "green" if (match.llm_score or 0) >= 80 else "yellow" if (match.llm_score or 0) >= 60 else "red"
+                    action_color = "green" if "HIGH" in (match.action or "") else "yellow" if "MEDIUM" in (match.action or "") else "white"
+                    
+                    table.add_row(
+                        str(i),
+                        match.title,
+                        match.company,
+                        f"[{score_color}]{match.llm_score or 0}[/{score_color}]",
+                        f"[{action_color}]{match.action or 'N/A'}[/{action_color}]",
+                        (match.llm_reasoning or "")[:60] + "..." if len(match.llm_reasoning or "") > 60 else (match.llm_reasoning or "")
+                    )
+                
+                console.print(table)
+            else:
+                console.print("[yellow]No matches found[/yellow]")
+            
+        except Exception as e:
+            console.print(f"[red]Matching failed: {e}[/red]")
+            raise typer.Exit(1)
+    
+    asyncio.run(run_matching())
+
+@review_app.command('start')
+def review_start(
+    resume_file: Optional[Path] = typer.Option(None, help="Resume file to review"),
+    job_title: str = typer.Option("Software Engineer", help="Target job title"),
+    company: str = typer.Option("TechCorp", help="Target company"),
+    max_iterations: int = typer.Option(3, help="Maximum review iterations")
+):
+    """Start resume review and improvement process"""
+    import asyncio
+    from libs.resume.parser import create_resume_parser
+    from libs.resume.review import create_review_iteration_manager
+    
+    if not resume_file or not resume_file.exists():
+        console.print(f"[red]Resume file not found: {resume_file}[/red]")
+        raise typer.Exit(1)
+    
+    async def run_review():
+        try:
+            # Parse resume
+            parser = create_resume_parser()
+            parsed_resume = parser.parse_file(resume_file)
+            
+            # Create review manager
+            session = get_session()
+            manager = create_review_iteration_manager(session)
+            
+            console.print(f"[cyan]Starting review process for {job_title} at {company}...[/cyan]")
+            
+            # Mock job description
+            job_description = f"Looking for a {job_title} with strong technical skills and {parsed_resume.years_of_experience or 3}+ years of experience."
+            
+            # Simulate review iterations
+            current_content = parsed_resume.fulltext
+            iteration = 1
+            
+            while iteration <= max_iterations:
+                console.print(f"\n[cyan]--- Iteration {iteration} ---[/cyan]")
+                
+                # Get critique (this would normally be through the manager)
+                from libs.resume.review import ResumeCritic
+                critic = ResumeCritic()
+                
+                critique, cost = await critic.critique_resume(
+                    current_content, job_description, job_title, company
+                )
+                
+                console.print(f"[cyan]Score: {critique.overall_score}/100[/cyan]")
+                console.print(f"[green]Strengths:[/green]")
+                for strength in critique.strengths:
+                    console.print(f"  • {strength}")
+                
+                console.print(f"[yellow]Areas for improvement:[/yellow]")
+                for weakness in critique.weaknesses:
+                    console.print(f"  • {weakness}")
+                
+                if critique.overall_score >= 80:
+                    console.print(f"[green]✅ Resume meets quality threshold! Final score: {critique.overall_score}/100[/green]")
+                    break
+                
+                if iteration < max_iterations:
+                    console.print(f"[cyan]Generating improved version...[/cyan]")
+                    
+                    # Generate rewrite
+                    from libs.resume.review import ResumeRewriter
+                    rewriter = ResumeRewriter()
+                    rewrite, rewrite_cost = await rewriter.rewrite_resume(
+                        current_content, critique, job_description
+                    )
+                    
+                    current_content = rewrite.new_content
+                    console.print(f"[cyan]Changes made: {rewrite.changes_summary}[/cyan]")
+                    console.print(f"[cyan]Cost this iteration: ${(cost + rewrite_cost)/100:.3f}[/cyan]")
+                
+                iteration += 1
+            
+            if iteration > max_iterations and critique.overall_score < 80:
+                console.print(f"[yellow]⚠️  Reached maximum iterations. Final score: {critique.overall_score}/100[/yellow]")
+            
+        except Exception as e:
+            console.print(f"[red]Review process failed: {e}[/red]")
+            raise typer.Exit(1)
+    
+    asyncio.run(run_review())
+
+# Add digest command to a new notifications app
+notifications_app = typer.Typer(help="Notifications and digest")
+APP.add_typer(notifications_app, name="notifications")
+
+@notifications_app.command('digest')
+def send_digest(
+    user_email: str = typer.Option(..., help="User email address"),
+    user_id: str = typer.Option("test_user", help="User ID")
+):
+    """Generate and send daily digest email"""
+    import asyncio
+    from libs.notifications.digest import create_digest_service
+    
+    async def send_digest_email():
+        try:
+            session = get_session()
+            digest_service = create_digest_service(session)
+            
+            console.print(f"[cyan]Generating daily digest for {user_email}...[/cyan]")
+            
+            success = await digest_service.send_daily_digest(user_id, user_email)
+            
+            if success:
+                console.print(f"[green]✅ Daily digest sent successfully to {user_email}[/green]")
+            else:
+                console.print(f"[red]❌ Failed to send digest to {user_email}[/red]")
+                
+        except Exception as e:
+            console.print(f"[red]Digest generation failed: {e}[/red]")
+            raise typer.Exit(1)
+    
+    asyncio.run(send_digest_email())
+
 @resume_app.command('ingest')
 def resume_ingest(file: Path):
-    _stub('resume.ingest', file=str(file))
+    """Ingest a resume file into the system"""
+    from libs.resume.parser import create_resume_parser
+    from libs.resume.chunker import create_resume_chunker
+    from libs.resume.embedding_service import create_embedding_service, EmbeddingProvider
+    import asyncio
+    
+    if not file.exists():
+        console.print(f"[red]Resume file not found: {file}[/red]")
+        raise typer.Exit(1)
+    
+    async def ingest_resume():
+        try:
+            # Parse resume
+            console.print(f"[cyan]Parsing resume: {file}[/cyan]")
+            parser = create_resume_parser()
+            parsed_resume = parser.parse_file(file)
+            
+            # Chunk resume
+            console.print("[cyan]Chunking resume content...[/cyan]")
+            chunker = create_resume_chunker()
+            chunks = chunker.chunk_resume(parsed_resume.fulltext, parsed_resume.sections)
+            
+            # Generate embeddings
+            console.print("[cyan]Generating embeddings...[/cyan]")
+            embedding_service = create_embedding_service(provider=EmbeddingProvider.MOCK)
+            
+            chunk_texts = [chunk.text for chunk in chunks]
+            responses = await embedding_service.embed_batch([
+                {"text": text, "model": "text-embedding-ada-002"} for text in chunk_texts
+            ])
+            
+            console.print(f"[green]✅ Resume ingested successfully![/green]")
+            console.print(f"[cyan]Parsed {len(parsed_resume.skills)} skills: {', '.join(parsed_resume.skills[:5])}{'...' if len(parsed_resume.skills) > 5 else ''}[/cyan]")
+            console.print(f"[cyan]Created {len(chunks)} chunks with {len(responses)} embeddings[/cyan]")
+            console.print(f"[cyan]Embedding stats: {embedding_service.get_stats()}[/cyan]")
+            
+            # TODO: Save to database
+            console.print("[yellow]Note: Database persistence not implemented yet[/yellow]")
+            
+        except Exception as e:
+            console.print(f"[red]Resume ingestion failed: {e}[/red]")
+            raise typer.Exit(1)
+    
+    asyncio.run(ingest_resume())
 
 @resume_app.command('list')
 def resume_list():
