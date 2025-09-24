@@ -2,6 +2,23 @@
 
 Implements the LLM-powered resume critique and iterative improvement system.
 Handles version lineage, diff generation, and acceptance workflow.
+
+State Model:
+The review workflow follows a defined state machine with the following states:
+- PENDING: Initial state when review is created
+- IN_PROGRESS: Review is being actively worked on through iterations
+- COMPLETED: Review process is finished, awaiting user decision
+- ACCEPTED: User has accepted the review results (terminal state)
+- REJECTED: User has rejected the review (terminal state)
+
+Valid State Transitions:
+- pending → in_progress, rejected
+- in_progress → completed, accepted, rejected  
+- completed → accepted, rejected
+- accepted/rejected are terminal states (no further transitions)
+
+This state model ensures consistency between CLI commands and internal logic,
+addressing the state discrepancy identified in the review workflow audit.
 """
 from __future__ import annotations
 import logging
