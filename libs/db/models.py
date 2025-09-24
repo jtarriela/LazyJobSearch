@@ -19,6 +19,16 @@ Base = declarative_base()
 def uuid_pk():
     return Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
+# User model for user management
+class User(Base):
+    __tablename__ = "users"
+    id = uuid_pk()
+    email = Column(Text, nullable=False, unique=True)
+    full_name = Column(Text)
+    preferences_json = Column(JSONB)  # For user preferences like locations, keywords, etc.
+    created_at = Column(DateTime)
+    updated_at = Column(DateTime)
+
 # Missing Company model that's referenced by migrations
 class Company(Base):
     __tablename__ = "companies"

@@ -22,9 +22,9 @@ ljs (lazyjobsearch)
     init ✅               # Write example config to ~/.lazyjobsearch/config.yaml
     show ✅               # Show current config
     validate ✅           # Validate current config file
-  user                   # ❌ MISSING - No user management implemented
-    show ❌               # Display user profile (from DB)
-    sync ❌               # Ensure user + application profiles exist
+  user                   # ✅ User management implemented  
+    show ✅               # Display user profile (from DB)
+    sync ✅               # Ensure user + application profiles exist
   resume
     ingest ✅             # Parse, chunk, embed a resume file
     list ✅               # List resume versions
@@ -55,11 +55,12 @@ ljs (lazyjobsearch)
     rewrite ⚠️           # PLACEHOLDER - Generate rewrite suggestions
     next ⚠️              # PLACEHOLDER - Next iteration
     satisfy ✅           # Mark review as satisfied
-    list ➕              # List reviews (NEW, replaces show)
+    list ➕              # List reviews (NEW, alongside show)
+    show ✅              # Show detailed review information (FIXED - was missing)
   apply
     run ✅               # Apply to jobs
-    bulk ❌              # MISSING - Bulk application operations
-    status ❌            # MISSING - Application status checking
+    bulk ✅              # Bulk application operations (FIXED)
+    status ✅            # Application status checking (FIXED)
   events
     tail ✅              # Stream events
   schema
