@@ -4,6 +4,9 @@ Anduril Industries Career Scraper Adapter
 This module provides a scraper adapter specifically designed for Anduril's careers page.
 It follows the anti-bot patterns established in the system and implements the 
 per-site adapter interface described in the architecture.
+
+NOTE: This scraper requires selenium and beautifulsoup4 dependencies:
+    pip install selenium beautifulsoup4 requests
 """
 from __future__ import annotations
 import time
@@ -12,12 +15,23 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from datetime import datetime
 
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+# Optional selenium imports - gracefully handle missing dependencies
+try:
+    from selenium import webdriver
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.webdriver.chrome.options import Options
+    from selenium.common.exceptions import TimeoutException, NoSuchElementException
+    SELENIUM_AVAILABLE = True
+except ImportError as e:
+    logging.getLogger(__name__).warning(f"Selenium not available: {e}. Install with 'pip install selenium'")
+    SELENIUM_AVAILABLE = False
+    # Create stub classes to prevent import errors
+    class webdriver:
+        class Chrome: pass
+    class TimeoutException(Exception): pass
+    class NoSuchElementException(Exception): pass
 
 from libs.scraper.anti_bot import (
     ScrapeSessionManager, 
@@ -25,6 +39,9 @@ from libs.scraper.anti_bot import (
     FingerprintGenerator,
     HumanBehaviorSimulator
 )
+from libs.scraper.retry_logic import retry_with_backoff, RATE_LIMIT_RETRY_CONFIG
+from libs.scraper.pagination import paginate_scraper, PaginationConfig, StandardPaginationHandler
+from libs.scraper.failure_metrics import get_failure_tracker, classify_exception, CrawlErrorType
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +61,11 @@ class AndurilScraper:
     """Scraper adapter for Anduril Industries careers page"""
     
     def __init__(self, proxy_pool: Optional[ProxyPool] = None, rate_limit_ppm: int = 10):
+        if not SELENIUM_AVAILABLE:
+            raise ImportError(
+                "AndurilScraper requires selenium. Install with: pip install selenium beautifulsoup4 requests"
+            )
+            
         self.base_url = "https://www.anduril.com/careers/"
         self.rate_limit_ppm = rate_limit_ppm
         self.session_manager = ScrapeSessionManager(
@@ -51,6 +73,12 @@ class AndurilScraper:
             FingerprintGenerator()
         )
         self.behavior_sim = HumanBehaviorSimulator()
+        self.failure_tracker = get_failure_tracker()
+        self.pagination_config = PaginationConfig(
+            max_pages=5,  # Reasonable default for job sites
+            page_delay=3.0,  # Longer delays for politeness
+            retry_failed_pages=True
+        )
         
     def _setup_driver(self, fingerprint_profile) -> webdriver.Chrome:
         """Setup Chrome driver with anti-bot measures"""
@@ -81,9 +109,10 @@ class AndurilScraper:
         
         return driver
         
+    @retry_with_backoff(RATE_LIMIT_RETRY_CONFIG)
     def search(self, query_terms: Optional[List[str]] = None) -> List[JobPosting]:
         """
-        Search for jobs on Anduril careers page
+        Search for jobs on Anduril careers page with pagination and retry support
         
         Args:
             query_terms: Optional list of search terms (not used for Anduril as they 
@@ -93,64 +122,141 @@ class AndurilScraper:
             List of JobPosting objects
         """
         session = self.session_manager.start()
-        jobs = []
+        all_jobs = []
         
         try:
             driver = self._setup_driver(session.profile)
             
             logger.info(f"Starting Anduril scrape session with proxy: {session.proxy}")
             
-            # Navigate to careers page
+            # Navigate to careers page  
+            self._navigate_to_page(driver)
+            
+            # Use pagination to scrape all pages
+            page_jobs_generator = paginate_scraper(
+                self._scrape_current_page,
+                driver,
+                self.pagination_config,
+                StandardPaginationHandler()
+            )
+            
+            pages_scraped = 0
+            pages_failed = 0
+            
+            for page_jobs in page_jobs_generator:
+                if page_jobs:
+                    all_jobs.extend(page_jobs)
+                    pages_scraped += 1
+                    logger.info(f"Scraped {len(page_jobs)} jobs from page {pages_scraped}")
+                else:
+                    pages_failed += 1
+                    logger.warning(f"No jobs found on page {pages_scraped + pages_failed}")
+            
+            # Record pagination metrics
+            self.failure_tracker.record_pagination_metrics(
+                pages_scraped, pages_failed, "anduril"
+            )
+            
+            logger.info(f"Completed Anduril scrape: {len(all_jobs)} jobs from {pages_scraped} pages")
+            
+        except Exception as e:
+            error_type = classify_exception(e)
+            self.failure_tracker.record_error(
+                error_type, str(e), "anduril", "anduril_careers", None
+            )
+            
+            # Check if it's a rate limiting error
+            if error_type == CrawlErrorType.RATE_LIMITED:
+                self.failure_tracker.record_rate_limit_hit("anduril", "anduril_careers")
+            
+            logger.error(f"Anduril scrape failed: {e}")
+            self.session_manager.finish(session, "error")
+            raise
+            
+        finally:
+            try:
+                driver.quit()
+            except Exception as e:
+                logger.warning(f"Error closing driver: {e}")
+                
+            session = self.session_manager.finish(session, "success" if all_jobs else "error")
+            
+        return all_jobs
+    
+    @retry_with_backoff()
+    def _navigate_to_page(self, driver: webdriver.Chrome):
+        """Navigate to careers page with retry logic"""
+        try:
             driver.get(self.base_url)
             
             # Wait for page to load and simulate human behavior
             time.sleep(self.behavior_sim.sleep_interval())
             
+            # Wait for page to be ready
+            WebDriverWait(driver, 10).until(
+                lambda d: d.execute_script("return document.readyState") == "complete"
+            )
+            
+        except TimeoutException as e:
+            self.failure_tracker.record_error(
+                CrawlErrorType.TIMEOUT, f"Page load timeout: {e}", 
+                "anduril", "anduril_careers"
+            )
+            raise
+    
+    def _scrape_current_page(self, driver: webdriver.Chrome) -> List[JobPosting]:
+        """Scrape jobs from the current page"""
+        jobs = []
+        
+        try:
             # Wait for job listings to load (adjust selector based on actual site)
             wait = WebDriverWait(driver, 10)
             
-            try:
-                # These selectors would need to be updated based on actual Anduril site structure
-                job_elements = wait.until(
-                    EC.presence_of_all_elements_located((By.CSS_SELECTOR, ".job-listing, .career-opportunity"))
-                )
-                
-                logger.info(f"Found {len(job_elements)} job postings")
-                
-                for i, job_element in enumerate(job_elements):
-                    try:
-                        # Simulate human scroll behavior
-                        if i > 0:
-                            time.sleep(self.behavior_sim.sleep_interval())
-                            
-                        job = self._extract_job_info(driver, job_element)
-                        if job:
-                            jobs.append(job)
-                            
-                        # Rate limiting
-                        if i > 0 and i % 5 == 0:
-                            time.sleep(60 / self.rate_limit_ppm)
-                            
-                    except Exception as e:
-                        logger.warning(f"Failed to extract job {i}: {e}")
-                        continue
-                        
-            except TimeoutException:
-                logger.warning("Timeout waiting for job listings to load")
-                
-        except Exception as e:
-            logger.error(f"Scraping failed: {e}")
-            self.session_manager.finish(session, "error")
+            job_elements = wait.until(
+                EC.presence_of_all_elements_located((By.CSS_SELECTOR, ".job-listing, .career-opportunity"))
+            )
             
-        finally:
-            try:
-                driver.quit()
-            except:
-                pass
-                
-        self.session_manager.finish(session, "success" if jobs else "error")
-        logger.info(f"Scraped {len(jobs)} jobs from Anduril")
-        
+            logger.info(f"Found {len(job_elements)} job postings on current page")
+            
+            for i, job_element in enumerate(job_elements):
+                try:
+                    # Simulate human scroll behavior
+                    if i > 0:
+                        time.sleep(self.behavior_sim.sleep_interval())
+                        
+                    job = self._extract_job_info(driver, job_element)
+                    if job:
+                        jobs.append(job)
+                        
+                    # Rate limiting
+                    if i > 0 and i % 5 == 0:
+                        rate_limit_delay = 60 / self.rate_limit_ppm
+                        logger.debug(f"Rate limiting: sleeping {rate_limit_delay:.1f}s")
+                        time.sleep(rate_limit_delay)
+                        
+                except Exception as e:
+                    error_type = classify_exception(e)
+                    self.failure_tracker.record_error(
+                        error_type, f"Failed to extract job {i}: {e}",
+                        "anduril", "anduril_careers", f"job_{i}"
+                    )
+                    logger.warning(f"Failed to extract job {i}: {e}")
+                    continue
+                    
+        except TimeoutException:
+            self.failure_tracker.record_error(
+                CrawlErrorType.TIMEOUT, "Timeout waiting for job listings to load",
+                "anduril", "anduril_careers"  
+            )
+            logger.warning("Timeout waiting for job listings to load")
+        except Exception as e:
+            error_type = classify_exception(e)
+            self.failure_tracker.record_error(
+                error_type, f"Error scraping page: {e}",
+                "anduril", "anduril_careers"
+            )
+            raise
+            
         return jobs
     
     def _extract_job_info(self, driver: webdriver.Chrome, job_element) -> Optional[JobPosting]:
