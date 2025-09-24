@@ -11,6 +11,8 @@ Based on requirements from the gap analysis and CLI resume ingest command.
 """
 from __future__ import annotations
 import time
+import hashlib
+import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
@@ -55,6 +57,79 @@ class ResumeIngestionService:
         self.chunker = create_resume_chunker()
         self.embedding_service = None  # Will be initialized with provider
         
+    def _compute_content_hash(self, parsed_resume: ParsedResume) -> str:
+        """Compute content hash for deduplication"""
+        # Create a canonical representation of resume content
+        content_parts = [
+            parsed_resume.fulltext.strip().lower(),
+            str(sorted(parsed_resume.skills)),
+            str(sorted(parsed_resume.sections.items())),
+            str(parsed_resume.contact_info),
+        ]
+        content = "|".join(filter(None, content_parts))
+        
+        # Use SHA-256 for content hashing
+        return hashlib.sha256(content.encode('utf-8')).hexdigest()
+    
+    def _check_resume_duplicate(self, content_hash: str, user_id: Optional[str] = None) -> Optional[str]:
+        """Check if resume with this content hash already exists
+        
+        Args:
+            content_hash: SHA-256 hash of resume content
+            user_id: Optional user ID for user-scoped deduplication
+            
+        Returns:
+            Existing resume ID if duplicate found, None otherwise
+        """
+        try:
+            # Query for existing resume with same content hash
+            # For now, implement basic content hash check - in production this would
+            # be a proper database field
+            existing_resume = self.db_session.query(Resume).filter(
+                Resume.fulltext.contains(f"[HASH:{content_hash}]")
+            ).first()
+            
+            if existing_resume:
+                logger.info(f"Duplicate resume detected", 
+                           existing_resume_id=existing_resume.id,
+                           content_hash=content_hash[:12])
+                return existing_resume.id
+            
+            return None
+            
+        except Exception as e:
+            logger.warning(f"Error checking for duplicate resume: {e}")
+            return None
+    
+    def _redact_pii(self, text: str) -> str:
+        """Redact PII from text for logging
+        
+        Args:
+            text: Text that may contain PII
+            
+        Returns:
+            Text with PII redacted
+        """
+        if not text:
+            return text
+        
+        # Define PII patterns
+        patterns = [
+            # Email addresses
+            (r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', '[EMAIL]'),
+            # Phone numbers (various formats)
+            (r'\(?([0-9]{3})\)?[-.\s]?([0-9]{3})[-.\s]?([0-9]{4})', '[PHONE]'),
+            (r'\b([0-9]{3})[-.\s]?([0-9]{2})[-.\s]?([0-9]{4})\b', '[SSN]'),  # SSN pattern
+            # Street addresses (basic pattern)
+            (r'\b\d+\s+[A-Za-z\s]+\s+(St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Ln|Lane|Blvd|Boulevard)\b', '[ADDRESS]'),
+        ]
+        
+        redacted_text = text
+        for pattern, replacement in patterns:
+            redacted_text = re.sub(pattern, replacement, redacted_text, flags=re.IGNORECASE)
+        
+        return redacted_text
+        
     def ingest_resume_file(self, 
                                file_path: Path, 
                                user_id: Optional[str] = None,
@@ -85,6 +160,31 @@ class ResumeIngestionService:
                 logger.info("Starting resume parsing", extra={"file_path": str(file_path)})
                 parsed_resume = self._parse_resume_file(file_path)
                 counter("resume_ingestion.parse_success")
+                
+                # Stage 1.5: Check for duplicates
+                logger.info("Checking for duplicate content")
+                content_hash = self._compute_content_hash(parsed_resume)
+                existing_resume_id = self._check_resume_duplicate(content_hash, user_id)
+                
+                if existing_resume_id:
+                    counter("resume_ingestion.duplicate_detected")
+                    logger.info("Duplicate resume detected - skipping ingestion", 
+                               existing_resume_id=existing_resume_id,
+                               content_hash=content_hash[:12])
+                    
+                    # Return existing resume info instead of processing duplicate
+                    end_time = time.time()
+                    processing_time_ms = (end_time - start_time) * 1000
+                    
+                    return IngestedResume(
+                        resume_id=existing_resume_id,
+                        parsed_resume=parsed_resume,
+                        chunks=[],  # Empty chunks for duplicate
+                        embedding_stats={"duplicate": True},
+                        processing_time_ms=processing_time_ms
+                    )
+                
+                counter("resume_ingestion.deduplication_success")
                 
                 # Stage 2: Chunk resume content
                 logger.info("Starting resume chunking", extra={"resume_sections": len(parsed_resume.sections)})
@@ -136,10 +236,13 @@ class ResumeIngestionService:
                 if not parsed_resume.fulltext.strip():
                     raise ValueError("No text content extracted from resume")
                     
+                # Log with PII redaction for debugging
+                redacted_sample = self._redact_pii(parsed_resume.fulltext[:200])
                 logger.debug("Resume parsing completed",
                            text_length=len(parsed_resume.fulltext),
                            skills_count=len(parsed_resume.skills),
-                           sections_count=len(parsed_resume.sections))
+                           sections_count=len(parsed_resume.sections),
+                           sample_text=redacted_sample)
                            
                 return parsed_resume
                 
@@ -175,7 +278,8 @@ class ResumeIngestionService:
                 
                 logger.debug("Resume chunking completed", 
                            chunks_created=len(chunks),
-                           total_tokens=sum(c.token_count for c in chunks))
+                           total_tokens=sum(c.token_count for c in chunks),
+                           sample_chunk=self._redact_pii(chunk_dicts[0]['text'][:100]) if chunk_dicts else "")
                            
                 return chunk_dicts
                 
@@ -256,11 +360,18 @@ class ResumeIngestionService:
         """Persist resume and chunks to database"""
         try:
             with timer("resume_ingestion.persistence"):
+                # Compute content hash for deduplication
+                content_hash = self._compute_content_hash(parsed_resume)
+                
                 # Create resume record
                 resume_id = str(uuid.uuid4())
+                # Add content hash to fulltext for deduplication (temporary solution)
+                # In production, this would be a separate indexed field
+                fulltext_with_hash = f"{parsed_resume.fulltext}\n[HASH:{content_hash}]"
+                
                 resume = Resume(
                     id=resume_id,
-                    fulltext=parsed_resume.fulltext,
+                    fulltext=fulltext_with_hash,
                     sections_json=str(parsed_resume.sections),  # JSON serialize
                     skills_csv=",".join(parsed_resume.skills),
                     yoe_raw=parsed_resume.years_of_experience,
