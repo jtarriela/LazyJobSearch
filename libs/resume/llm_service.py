@@ -11,7 +11,7 @@ import time
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Dict, Optional, Any, Tuple
 from enum import Enum
 import asyncio
@@ -142,7 +142,8 @@ class ParsedResumeData(BaseModel):
     education_level: Optional[str] = Field(None, description="Highest education level")
     
     # Validation
-    @validator('links', pre=True, always=True)
+    @field_validator('links', mode='before')
+    @classmethod
     def validate_links(cls, v):
         """Ensure links is always a Links object"""
         if v is None:
@@ -151,7 +152,8 @@ class ParsedResumeData(BaseModel):
             return Links(**v)
         return v
     
-    @validator('skills_structured', pre=True, always=True)
+    @field_validator('skills_structured', mode='before')
+    @classmethod
     def validate_skills_structured(cls, v):
         """Ensure skills_structured is always a Skills object"""
         if v is None:
@@ -159,21 +161,24 @@ class ParsedResumeData(BaseModel):
         if isinstance(v, dict):
             return Skills(**v)
         return v
-    @validator('email')
+    @field_validator('email', mode='before')
+    @classmethod
     def validate_email(cls, v):
         """Basic email validation"""
         if v and '@' not in v:
             return None  # Invalid email, return None
         return v
     
-    @validator('phone')
+    @field_validator('phone', mode='before')
+    @classmethod
     def validate_phone(cls, v):
         """Basic phone validation"""
         if v and not re.search(r'\d{3}', v):  # At least 3 digits
             return None
         return v
     
-    @validator('skills', pre=True, always=True)
+    @field_validator('skills', mode='before')
+    @classmethod
     def validate_skills(cls, v):
         """Ensure skills is always a list"""
         if v is None:
@@ -245,11 +250,10 @@ class LLMConfig:
             raise ValueError("ANTHROPIC_API_KEY required for Anthropic provider")
 
 
-class MockLLMClient(LLMClient):
+class MockLLMClient:
     """Mock LLM client for testing"""
     
     def __init__(self):
-        super().__init__()
         self.request_count = 0
     
     async def chat(self, model: str, system: str, user: str, pdf_bytes: Optional[bytes] = None, text: Optional[str] = None) -> LLMResponse:
@@ -268,11 +272,12 @@ class MockLLMClient(LLMClient):
             temperature=0.1
         )
         
-class OpenAILLMClient(LLMClient):
+        return await mock_provider.generate_completion(mock_request)
+        
+class OpenAILLMClient:
     """OpenAI LLM client implementation"""
     
     def __init__(self, api_key: str, timeout: int = 30):
-        super().__init__()
         self.api_key = api_key
         self.timeout = timeout
         
@@ -284,11 +289,10 @@ class OpenAILLMClient(LLMClient):
         return await mock_client.chat(model, system, user, pdf_bytes, text)
 
 
-class AnthropicLLMClient(LLMClient):
+class AnthropicLLMClient:
     """Anthropic LLM client implementation"""
     
     def __init__(self, api_key: str, timeout: int = 30):
-        super().__init__()
         self.api_key = api_key
         self.timeout = timeout
         
@@ -300,7 +304,7 @@ class AnthropicLLMClient(LLMClient):
         return await mock_client.chat(model, system, user, pdf_bytes, text)
 
 
-def create_llm_client(config: Optional[LLMConfig] = None) -> LLMClient:
+def create_llm_client(config: Optional[LLMConfig] = None) -> 'LLMClient':
     """Factory function to create LLM client based on configuration"""
     if config is None:
         config = LLMConfig()
