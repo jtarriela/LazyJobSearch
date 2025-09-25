@@ -1,169 +1,235 @@
 """
-Prompt templates for resume parsing + retries + PDF-requirements inference.
-
-This module centralizes compact, token-efficient system/user prompts used when
-calling an LLM to extract structured resume data or to infer fields a PDF is
-requesting. It aligns with the mock/real providers that look for the sentinel
-'RESUME TEXT:' (or 'PDF TEXT:') in the user prompt.
-
-Exports:
-- build_parse_prompt(text, hints=None, schema_hint=None) -> (system, user)
-- build_retry_prompt(text, missing_fields, current_json=None) -> (system, user)
-- build_requirements_prompt(pdf_text) -> (system, user)
+Enhanced prompt templates for comprehensive resume parsing.
+Ensures complete extraction of all resume information.
 """
 
 from __future__ import annotations
 from typing import Dict, Any, Iterable, Tuple, Optional
 import json
 
-
-# -------------------------
-# Internal helpers
-# -------------------------
-
-_DEFAULT_SCHEMA = """{
-  "full_name": "<string|null>",
-  "email": "<string|null>",
-  "phone": "<string|null>",
-  "skills": ["<string>", "..."],
+# Comprehensive schema for resume extraction
+COMPREHENSIVE_SCHEMA = """{
+  "full_name": "string",
+  "email": "string", 
+  "phone": "string",
+  "location": "string or null",
+  "summary": "professional summary or objective - full text",
+  "titles": ["list of all professional titles mentioned"],
+  "skills": [
+    "COMPLETE list of EVERY skill, technology, tool, framework, library, platform, language, etc.",
+    "Include items from parenthetical lists (e.g. 'Python (pandas, numpy)' extracts as Python, pandas, numpy)",
+    "Include all acronyms AND their expansions if mentioned"
+  ],
+  "skills_structured": {
+    "programming": ["all programming languages"],
+    "frameworks": ["all frameworks and libraries"], 
+    "tools": ["all tools, IDEs, and development platforms"],
+    "databases": ["all database technologies"],
+    "cloud": ["all cloud platforms and services"],
+    "ml_ai": ["all ML/AI/Data Science technologies"],
+    "other": ["any other technical skills"],
+    "all": ["complete combined list of everything"]
+  },
   "experience": [
     {
-      "title": "<string|null>",
-      "company": "<string|null>",
-      "duration": "<string|null>",
-      "description": "<string|null>"
+      "title": "exact job title",
+      "company": "company name",
+      "duration": "complete date range as shown",
+      "location": "location if mentioned",
+      "description": "role overview if provided",
+      "bullets": [
+        "complete text of each bullet point",
+        "preserve all metrics, percentages, and achievements",
+        "do not summarize or shorten"
+      ],
+      "technologies": ["technologies specifically used in this role"]
     }
   ],
   "education": [
     {
-      "degree": "<string|null>",
-      "field": "<string|null>",
-      "institution": "<string|null>",
-      "year": "<string|null>"
+      "degree": "degree type (B.S., M.S., Ph.D., etc.)",
+      "field": "field of study",
+      "institution": "complete institution name",
+      "year": "graduation year or date range",
+      "gpa": "GPA if mentioned",
+      "specialization": "any specialization, concentration, or thesis topic"
     }
   ],
-  "full_text": "<the ENTIRE resume text you received>",
-  "summary": "<string|null>",
-  "certifications": ["<string>", "..."],
-  "years_of_experience": <number|null>,
-  "education_level": "<high_school|associates|bachelors|masters|phd|null>",
-  "links": {"linkedin":"<string|null>", "github":"<string|null>", "portfolio":"<string|null>"}
+  "certifications": [
+    {"name": "certification name", "issuer": "issuing organization", "date": "date obtained"}
+  ],
+  "projects": [
+    {
+      "name": "project name",
+      "description": "complete project description",
+      "technologies": ["technologies used"],
+      "link": "project URL if provided"
+    }
+  ],
+  "awards": [
+    "complete text of each award, honor, or achievement"
+  ],
+  "publications": [
+    "complete citation or description of each publication"
+  ],
+  "links": {
+    "linkedin": "LinkedIn URL",
+    "github": "GitHub URL", 
+    "portfolio": "portfolio/website URL",
+    "other": ["any other URLs"]
+  },
+  "years_of_experience": number or null,
+  "education_level": "highest degree achieved",
+  "clearance_level": "security clearance level if mentioned (e.g., 'ACTIVE CLEARANCE', 'Secret', 'Top Secret')"
 }"""
-
-
-def _compact_hints(hints: Optional[Dict[str, Any]]) -> str:
-    if not hints:
-        return ""
-    parts = []
-    if hints.get("email"):
-        parts.append(f"Email={hints['email']}")
-    if hints.get("phone"):
-        parts.append(f"Phone={hints['phone']}")
-    if hints.get("name"):
-        parts.append(f"Name={hints['name']}")
-    return "; ".join(parts)
-
-
-# -------------------------
-# Public builders
-# -------------------------
 
 def build_parse_prompt(
     text: str,
     hints: Optional[Dict[str, Any]] = None,
     schema_hint: Optional[str] = None,
 ) -> Tuple[str, str]:
-    """
-    Return (system_prompt, user_prompt) for FIRST-PASS parsing.
+    """Build comprehensive extraction prompt for first-pass parsing."""
+    
+    system = """You are an expert resume parser with deep knowledge of technical roles and terminology.
+Your task is to extract EVERY piece of information from the resume with 100% accuracy.
 
-    - Uses 'RESUME TEXT:' sentinel so providers can reliably slice content.
-    - Demands ONLY raw JSON, no markdown fences or prose.
-    - If schema_hint is not provided, uses an informal minimal schema.
-    - Keeps tokens lean; avoids over-instruction.
-    """
-    system = (
-        "You are a precise resume extraction engine. "
-        "Return ONLY one valid JSON object matching the schema. "
-        "Do NOT invent information that is not present. "
-        "If a field is missing, use null for scalars or [] for lists."
-    )
+Critical extraction rules:
+1. Extract ALL skills, technologies, tools, and platforms mentioned ANYWHERE in the resume
+2. When skills are listed with examples in parentheses (e.g., "Python (pandas, numpy, scikit-learn)"), extract BOTH the main item AND each item in parentheses as separate skills
+3. Include all acronyms AND their expansions if both are mentioned
+4. Extract complete text of all bullet points - do not summarize
+5. Preserve all metrics, percentages, and quantified achievements exactly as stated
+6. Include all dates, durations, and time periods exactly as shown
+7. Extract security clearance information if mentioned
+8. Do NOT invent or infer information not explicitly stated
 
-    hints_line = _compact_hints(hints)
-    schema = schema_hint.strip() if schema_hint else _DEFAULT_SCHEMA
+Return ONLY valid JSON matching the schema. No markdown, no commentary."""
 
-    user_sections = []
-    user_sections.append("# TASK\nExtract structured resume data as JSON ONLY.\n")
-    if hints_line:
-        user_sections.append(f"# HINTS\n{hints_line}\n")
-    user_sections.append("# SCHEMA (informal, types in angle brackets)\n")
-    user_sections.append(schema + "\n")
-    user_sections.append("RESUME TEXT:\n")
-    user_sections.append(text.rstrip() + "\n")
-    user_sections.append("IMPORTANT:\n- Output MUST be a single JSON object with the exact keys from the schema.\n"
-                         "- No markdown, no commentary, no code fences.\n")
+    schema = schema_hint if schema_hint else COMPREHENSIVE_SCHEMA
+    
+    user = f"""Extract ALL information from this resume into the exact JSON structure.
 
-    user = "\n".join(user_sections)
+CRITICAL INSTRUCTIONS:
+- Extract EVERY skill, technology, tool mentioned (including from parenthetical lists)
+- Include complete text of all experience bullets and descriptions
+- Do not skip or summarize any information
+- If parsing "Python (pandas, numpy, scikit-learn, LightGBM, RAPIDS, ...)" extract: Python, pandas, numpy, scikit-learn, LightGBM, RAPIDS
+- Look for skills in: summary, experience bullets, education, projects, and dedicated skills sections
+- Include both general categories (e.g., "Machine Learning") and specific tools (e.g., "TensorFlow", "PyTorch")
+
+SCHEMA:
+{schema}
+
+RESUME TEXT:
+{text}
+
+Return ONLY the JSON object. No additional text."""
+    
     return system, user
-
 
 def build_retry_prompt(
     text: str,
     missing_fields: Iterable[str],
     current_json: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, str]:
-    """
-    Return (system_prompt, user_prompt) for FOLLOW-UP passes when some fields
-    were missing. The model must ONLY return a JSON object containing the
-    missing fields filled (others omitted).
-    """
-    system = (
-        "You are a precise resume extraction engine. "
-        "Return ONLY one JSON object. "
-        "Do NOT invent information. If still missing, set null/[]."
-    )
+    """Build retry prompt for missing fields with emphasis on completeness."""
+    
+    system = """You are an expert resume parser. 
+Some critical information was not extracted in the first pass.
+Your task is to carefully re-read the resume and extract ALL missing information.
 
-    missing_str = ", ".join(str(f) for f in missing_fields) or "(none)"
-    current_str = json.dumps(current_json or {}, ensure_ascii=False, separators=(",", ":"), indent=2)
+Remember:
+- Skills can appear anywhere in the resume (summary, experience, education, projects)
+- Extract items from parenthetical lists as separate skills
+- Include all variations of technologies mentioned
+- Do not skip any sections of the resume"""
 
-    user_sections = []
-    user_sections.append("# TASK\nSome fields were missing; return ONLY those fields in JSON.\n")
-    user_sections.append(f"# MISSING FIELDS\n{missing_str}\n")
-    user_sections.append("# CURRENT DATA (already extracted; do not repeat fields that are not missing)\n")
-    user_sections.append(current_str + "\n")
-    user_sections.append("RESUME TEXT:\n")
-    user_sections.append(text.rstrip() + "\n")
-    user_sections.append("IMPORTANT:\n- Output MUST be a single JSON object containing ONLY the missing fields.\n"
-                         "- No markdown, no commentary, no code fences.\n")
+    missing_str = ", ".join(str(f) for f in missing_fields)
+    current_str = json.dumps(current_json or {}, indent=2)
+    
+    user = f"""The following fields are incomplete or missing. Extract them comprehensively.
 
-    user = "\n".join(user_sections)
+MISSING/INCOMPLETE FIELDS:
+{missing_str}
+
+CURRENT EXTRACTED DATA:
+{current_str}
+
+Special attention to skills extraction:
+- If current skills list has fewer than 20 items for a technical resume, you likely missed many
+- Check experience bullets for technologies used
+- Check education section for relevant coursework or tools
+- Look for skills mentioned in context, not just in skills sections
+
+RESUME TEXT:
+{text}
+
+Return JSON with the complete missing information. Be exhaustive in your extraction."""
+    
     return system, user
 
+def build_skill_enhancement_prompt(text: str, current_skills: List[str]) -> Tuple[str, str]:
+    """Special prompt for comprehensive skill extraction when initial extraction is insufficient."""
+    
+    system = """You are a technical recruiter and resume expert specializing in identifying technical skills.
+Your task is to identify EVERY technical skill, tool, technology, framework, library, and platform mentioned in this resume.
+
+Include:
+- Programming languages
+- Frameworks and libraries  
+- Development tools and IDEs
+- Databases and data stores
+- Cloud platforms and services
+- ML/AI technologies
+- DevOps and CI/CD tools
+- Testing frameworks
+- Containerization and orchestration
+- Version control systems
+- Operating systems
+- Methodologies and practices
+- Any other technical competency"""
+    
+    current_skills_str = ", ".join(current_skills) if current_skills else "none found yet"
+    
+    user = f"""Extract ALL technical skills from this resume. The current extraction only found: {current_skills_str}
+
+This appears incomplete. Carefully read through:
+1. The skills section (including items in parentheses)
+2. Each job's responsibilities and achievements
+3. Education and certifications
+4. Projects and publications
+5. Any technical terms mentioned anywhere
+
+For parenthetical lists like "Python (pandas, numpy, scikit-learn)", extract each item separately.
+
+RESUME TEXT:
+{text}
+
+Return a JSON object with a single key "skills" containing a comprehensive array of ALL technical skills found."""
+    
+    return system, user
 
 def build_requirements_prompt(pdf_text: str) -> Tuple[str, str]:
-    """
-    Return (system_prompt, user_prompt) for PDF requirements inference
-    (extracting the fields the PDF is asking the user to provide).
+    """Build prompt for inferring requirements from PDF text."""
+    
+    system = """You are a document analysis expert.
+Given PDF text containing a form or document with fields to fill, identify all the input fields being requested.
+Return ONLY a JSON array describing these fields."""
+    
+    user = f"""Analyze this PDF text and identify all fields/inputs being requested.
 
-    Output MUST be a JSON array of objects:
-      [{"name": "...", "type": "string|number|date|email|phone|url|enum|address|textarea",
-        "required": true/false, "description": "<string|null>",
-        "options": ["opt1", "..."]|null, "regex_hint": "<string|null>", "example": "<string|null>"}]
-    """
-    system = (
-        "You are a form field inference engine. "
-        "Given PDF text (labels/instructions), return ONLY a JSON array describing input fields. "
-        "Do NOT include any text outside JSON."
-    )
+Return a JSON array where each object has:
+- name: field name
+- type: string|number|date|email|phone|url|enum|address|textarea  
+- required: boolean
+- description: string or null
+- options: array of options for enum types, null otherwise
+- regex_hint: validation pattern hint if applicable
+- example: example value if provided
 
-    user_sections = []
-    user_sections.append("# TASK\nInfer the input fields the PDF requests. Return ONLY a JSON array.\n")
-    user_sections.append("# SCHEMA\n"
-                         '[{"name":"<string>", "type":"string|number|date|email|phone|url|enum|address|textarea", '
-                         '"required":<boolean>, "description":"<string|null>", "options":["<string>", "..."]|null, '
-                         '"regex_hint":"<string|null>", "example":"<string|null>"}]\n')
-    user_sections.append("PDF TEXT:\n")
-    user_sections.append(pdf_text.rstrip() + "\n")
-    user_sections.append("IMPORTANT:\n- Output MUST be a JSON array only. No markdown, no prose.\n")
+PDF TEXT:
+{pdf_text}
 
-    user = "\n".join(user_sections)
+Return ONLY the JSON array."""
+    
     return system, user
