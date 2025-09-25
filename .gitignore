@@ -47,4 +47,4 @@ logs/
 tmp/
 *.tmp
 *.temp
-test_*_fix.py
+test_*_fix.py.env

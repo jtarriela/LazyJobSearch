@@ -19,7 +19,7 @@ While the web frontend is in design, a terminal CLI enables full workflow automa
 Example (stubbed today):
 ```
 python -m cli.ljs config init
-python -m cli.ljs resume ingest ./resumes/my_resume.pdf
+python -m cli.ljs resume ingest ./tests/jd_tarriela.pdf
 python -m cli.ljs match run --resume latest --limit 50
 python -m cli.ljs review start <job_id>
 python -m cli.ljs apply run <job_id> --dry-run
