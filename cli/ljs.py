@@ -28,6 +28,7 @@ from logging import Logger
 from libs.db.session import get_session
 from libs.db import models
 from jsonschema import validate as js_validate, ValidationError
+from pydantic import BaseModel, Field, ValidationError as PydValidationError, validator
 
 APP = typer.Typer(add_completion=False, help="LazyJobSearch CLI")
 console = Console()
@@ -114,6 +115,62 @@ def validate_config(conf: Dict[str, Any]) -> None:
     import json as _json
     schema = _json.loads(schema_path.read_text())
     js_validate(instance=conf, schema=schema)
+    # Pydantic model validation for stronger typing
+    class IterationCfg(BaseModel):
+        max_iterations_per_job: int = Field(3, ge=1)
+        auto_request_next_if_score_improves_pct: int | None = Field(None, ge=1, le=100)
+
+    class PreferencesCfg(BaseModel):
+        locations: list[str] | None = None
+        include_keywords: list[str] | None = None
+        exclude_keywords: list[str] | None = None
+
+    class UserCfg(BaseModel):
+        email: str
+        full_name: str | None = None
+        preferences: PreferencesCfg | None = None
+        iteration: IterationCfg = IterationCfg()
+
+    class ApplicationProfileCfg(BaseModel):
+        name: str
+        answers: dict[str, Any] | None = None
+        files: dict[str, Any] | None = None
+        default: bool | None = False
+
+    class MatchingCfg(BaseModel):
+        fts_query_expansion: str | None = 'simple'
+        vector_top_k: int = Field(50, ge=1)
+        llm_top_k: int = Field(12, ge=1)
+        llm_model: str | None = 'gpt-4o-mini'
+
+    class ApplyCfg(BaseModel):
+        enabled_portals: list[str] | None = None
+        dry_run: bool = True
+        evidence_capture: bool | None = True
+
+    class LoggingCfg(BaseModel):
+        level: str = Field('INFO')
+        json: bool | None = False
+        file: str | None = None
+
+        @validator('level')
+        def _level(cls, v):  # noqa: N805
+            allowed = {'DEBUG','INFO','WARNING','ERROR','CRITICAL'}
+            if v.upper() not in allowed:
+                raise ValueError(f"Invalid log level: {v}")
+            return v.upper()
+
+    class RootConfig(BaseModel):
+        user: UserCfg
+        application_profiles: list[ApplicationProfileCfg] | None = None
+        matching: MatchingCfg = MatchingCfg()
+        apply: ApplyCfg = ApplyCfg()
+        logging: LoggingCfg = LoggingCfg()
+
+    try:
+        RootConfig(**conf)
+    except PydValidationError as e:  # rethrow as typer-friendly error
+        raise typer.BadParameter(f"Pydantic config validation failed: {e.errors()}" )
 
 
 def print_config(conf: Dict[str, Any]):
@@ -180,6 +237,9 @@ def config_validate():
         validate_config(ctx.config)
     except ValidationError as e:
         console.print(f"[red]Config invalid:[/red] {e.message}")
+        raise typer.Exit(code=1)
+    except typer.BadParameter as e:
+        console.print(f"[red]{e}[/red]")
         raise typer.Exit(code=1)
     console.print("[green]Config OK[/green]")
 
