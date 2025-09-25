@@ -20,7 +20,7 @@ from libs.scraper.careers_discovery import CareersDiscoveryService
 from libs.scraper.anduril_adapter import AndurilScraper, JobPosting
 from libs.scraper.ats_scrapers import GreenhouseScraper, LeverScraper, WorkdayScraper
 from libs.scraper.failure_metrics import get_failure_tracker, crawl_session, company_crawl, classify_exception
-
+from libs.companies.portal_detection import PortalDetectionService
 logger = logging.getLogger(__name__)
 
 class CrawlWorker:
@@ -28,6 +28,7 @@ class CrawlWorker:
     
     def __init__(self):
         self.discovery_service = CareersDiscoveryService()
+        self.portal_detector = PortalDetectionService() # Add the new service
         self.failure_tracker = get_failure_tracker()
         self._scrapers = {
             'anduril': self._create_anduril_scraper,
@@ -35,6 +36,36 @@ class CrawlWorker:
             'lever': self._create_lever_scraper,
             'workday': self._create_workday_scraper
         }
+    def _determine_scraper_type(self, careers_url: str, page_html: str) -> str:
+        """Determine which scraper to use based on careers page URL and content."""
+
+        # First, try to detect the portal from the HTML content
+        detected_portal, confidence = self.portal_detector.detect_portal(page_html)
+
+        if confidence > 0.7: # Only trust high-confidence detections
+            portal_map = {
+                'greenhouse': 'greenhouse',
+                'lever': 'lever',
+                'workday': 'workday',
+                'ashby': 'ashby',
+                # ... add other mappings as you implement more scrapers
+            }
+            scraper_key = portal_map.get(detected_portal.value)
+            if scraper_key:
+                self.failure_tracker.log_info(f"Detected ATS '{scraper_key}' with {confidence:.0%} confidence for {careers_url}")
+                return scraper_key
+
+        # Fallback to the original URL-based guesswork if content detection fails
+        careers_url_lower = careers_url.lower()
+        if 'greenhouse.io' in careers_url_lower or 'boards.greenhouse.io' in careers_url_lower:
+            return 'greenhouse'
+        if 'lever.co' in careers_url_lower or 'jobs.lever.co' in careers_url_lower:
+            return 'lever'
+        if 'myworkdayjobs.com' in careers_url_lower:
+            return 'workday'
+
+        self.failure_tracker.log_warning(f"Could not determine ATS type for {careers_url}, defaulting to custom scraper.")
+        return 'custom' # A safer default than assuming greenhouse
     
     def _create_anduril_scraper(self) -> AndurilScraper:
         """Create an Anduril scraper instance"""
@@ -188,40 +219,29 @@ class CrawlWorker:
             logger.error(f"Error discovering careers URL for {company.name}: {e}")
             return None
     
-    def _determine_scraper_type(self, careers_url: str) -> str:
-        """Determine which scraper to use based on the careers URL
-        
-        Args:
-            careers_url: The careers page URL
-            
-        Returns:
-            Scraper type identifier
-        """
-        careers_url_lower = careers_url.lower()
-        
-        # Company-specific scrapers
-        if 'anduril.com' in careers_url_lower:
-            return 'anduril'
-        
-        # ATS platform detection
-        if 'greenhouse.io' in careers_url_lower or 'boards.greenhouse.io' in careers_url_lower:
-            return 'greenhouse'
-        elif 'lever.co' in careers_url_lower or 'jobs.lever.co' in careers_url_lower:
-            return 'lever'
-        elif 'myworkdayjobs.com' in careers_url_lower or 'workday' in careers_url_lower:
-            return 'workday'
-        
-        # Try to detect ATS by common patterns in URL structure
-        if '/greenhouse/' in careers_url_lower or '/boards/' in careers_url_lower:
-            return 'greenhouse'
-        elif '/lever/' in careers_url_lower:
-            return 'lever'
-        elif '/workday/' in careers_url_lower or '/jobs/' in careers_url_lower:
-            return 'workday'
-        
-        # Default to greenhouse as it's quite common
-        logger.info(f"Could not determine ATS type for {careers_url}, defaulting to greenhouse")
-        return 'greenhouse'
+def _determine_scraper_type(self, careers_url: str, page_html: str) -> str:
+    """Determine which scraper to use based on the careers page URL and page content."""
+    
+    # First, try to detect the portal from the HTML content
+    detected_portal = self.portal_detector.detect_portal(page_html)
+
+    # Map the detected portal type to the correct scraper name
+    scraper_map = {
+        PortalType.GREENHOUSE: 'greenhouse',
+        PortalType.LEVER: 'lever',
+        PortalType.WORKDAY: 'workday',
+        # ... add mappings for other scrapers ...
+    }
+    
+    scraper_key = scraper_map.get(detected_portal)
+    
+    if scraper_key and scraper_key in self._scrapers:
+        logger.info(f"Detected ATS type: {scraper_key} for {careers_url}")
+        return scraper_key
+
+    # Fallback for custom sites or if detection fails
+    logger.warning(f"Could not determine ATS type for {careers_url}, attempting custom scrape.")
+    return 'custom' # A new scraper for bespoke sites
     
     def _extract_company_domain(self, company: models.Company, careers_url: str) -> str:
         """Extract company domain for ATS scrapers

@@ -996,27 +996,19 @@ def companies_add(
     update: bool = typer.Option(False, "--update", help="Update existing company seed")
 ):
     """Add a company with optional auto-discovery"""
-    from libs.companies import CompanyAutoDiscoveryService
+    from libs.companies.auto_discovery import CompanyAutoDiscoveryService
     
     ctx = pass_context.get()
     
     if not auto:
-        console.print("[yellow]Manual company addition not yet implemented. Use --auto for auto-discovery.[/yellow]")
-        console.print(f"[cyan]To add {name} manually, use: ljs generate company-template {name.lower().replace(' ', '-')}[/cyan]")
+        console.print("[yellow]Manual company addition is deprecated. Use --auto for auto-discovery and scraper generation.[/yellow]")
         return
     
     console.print(f"[cyan]Starting auto-discovery for company: {name}[/cyan]")
-    if domain:
-        console.print(f"[cyan]Using provided domain: {domain}[/cyan]")
-    else:
-        console.print("[cyan]Domain will be auto-resolved[/cyan]")
     
     try:
-        # Initialize auto-discovery service
         discovery_service = CompanyAutoDiscoveryService()
-        
-        # Perform discovery
-        success, message, seed = discovery_service.create_company_seed(
+        success, message, seed = discovery_service.discover_and_create_seed(
             company_name=name,
             domain=domain,
             dry_run=ctx.dry_run,
@@ -1026,14 +1018,9 @@ def companies_add(
         if success:
             if ctx.dry_run:
                 console.print("[green]✅ Company seed generated successfully (dry run)[/green]")
-                console.print("\n" + message)
+                console.print(f"\n{message}")
             else:
-                console.print("[green]✅ Company seed created successfully![/green]")
-                console.print(f"[cyan]{message}[/cyan]")
-                if seed:
-                    console.print(f"[cyan]Company ID: {seed.id}[/cyan]")
-                    console.print(f"[cyan]Portal Type: {seed.portal.type.value}[/cyan]")
-                    console.print(f"[cyan]Careers URL: {seed.careers.primary_url}[/cyan]")
+                console.print(f"[green]✅ {message}[/green]")
         else:
             console.print(f"[red]❌ Failed to create company seed: {message}[/red]")
             raise typer.Exit(1)

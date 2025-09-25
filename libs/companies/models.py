@@ -1,9 +1,3 @@
-"""
-Company seed data models and validation.
-
-This module defines Pydantic models for company seed YAML files that
-are auto-generated and stored in the user's configuration directory.
-"""
 from __future__ import annotations
 from pydantic import BaseModel, HttpUrl, Field, field_validator
 from typing import List, Optional, Dict, Any
@@ -18,11 +12,6 @@ class PortalType(str, Enum):
     LEVER = "lever"
     WORKDAY = "workday"
     ASHBY = "ashby"
-    JOBVITE = "jobvite"
-    SMARTRECRUITERS = "smartrecruiters"
-    WORKABLE = "workable"
-    ICIMS = "icims"
-    BAMBOOHR = "bamboohr"
     CUSTOM = "custom"
 
 
@@ -70,41 +59,17 @@ class CompanySeed(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     notes: Optional[str] = None
 
-    @field_validator('id')
-    @classmethod
-    def validate_slug(cls, v):
-        """Ensure ID is a valid slug"""
-        if not re.match(r'^[a-z0-9]+(?:-[a-z0-9]+)*$', v):
-            raise ValueError('ID must be a valid slug (lowercase, hyphens allowed)')
-        return v
-
-    @field_validator('domain')
-    @classmethod
-    def validate_domain(cls, v):
-        """Normalize domain"""
-        # Remove protocol if present
-        domain = re.sub(r'^https?://', '', v)
-        # Remove trailing slash
-        domain = domain.rstrip('/')
-        # Remove www. prefix
-        domain = re.sub(r'^www\.', '', domain)
-        return domain
-
     def model_post_init(self, __context):
         """Set default metadata after initialization"""
         if not self.metadata.get('created_at'):
             self.metadata['created_at'] = datetime.utcnow().isoformat()
-        
-        # Set default crawler start URLs if not provided
         if not self.crawler.start_urls:
             self.crawler.start_urls = [self.careers.primary_url]
 
 
 def generate_slug(company_name: str) -> str:
     """Generate a slug from company name"""
-    # Convert to lowercase, replace spaces and special chars with hyphens
     slug = re.sub(r'[^\w\s-]', '', company_name.lower())
     slug = re.sub(r'[-\s]+', '-', slug)
-    # Remove common suffixes
     slug = re.sub(r'-(inc|corp|llc|ltd|company)$', '', slug)
     return slug.strip('-')
