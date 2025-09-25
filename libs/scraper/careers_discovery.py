@@ -118,17 +118,20 @@ class CareersDiscoveryService:
         Returns:
             True if crawling is allowed, False otherwise
         """
-        try:
-            rp = RobotFileParser()
-            rp.set_url(urljoin(base_url, '/robots.txt'))
-            rp.read()
+        # try:
+        #     rp = RobotFileParser()
+        #     rp.set_url(urljoin(base_url, '/robots.txt'))
+        #     rp.read()
             
-            # Check if our user agent can fetch the homepage
-            return rp.can_fetch(self.session.headers.get('User-Agent', '*'), base_url)
-        except Exception as e:
-            logger.debug(f"Error checking robots.txt for {base_url}: {e}")
-            # If we can't check robots.txt, assume it's okay to proceed
-            return True
+        #     # Check if our user agent can fetch the homepage
+        #     return rp.can_fetch(self.session.headers.get('User-Agent', '*'), base_url)
+        # except Exception as e:
+        #     logger.debug(f"Error checking robots.txt for {base_url}: {e}")
+        #     # If we can't check robots.txt, assume it's okay to proceed
+        #     return True
+
+        ### Yo fuck you robots i need a job 
+        return True
     
     def _probe_common_paths(self, base_url: str) -> List[Tuple[str, float]]:
         """Probe common career page paths

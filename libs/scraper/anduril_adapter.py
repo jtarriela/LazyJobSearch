@@ -21,7 +21,7 @@ try:
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
-    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.firefox.options import Options
     from selenium.common.exceptions import TimeoutException, NoSuchElementException
     SELENIUM_AVAILABLE = True
 except ImportError as e:
@@ -80,14 +80,15 @@ class AndurilScraper:
             retry_failed_pages=True
         )
         
-    def _setup_driver(self, fingerprint_profile) -> webdriver.Chrome:
-        """Setup Chrome driver with anti-bot measures"""
+    def _setup_driver(self, fingerprint_profile) -> webdriver.Firefox:
+        """Setup Firefox driver with anti-bot measures"""
         options = Options()
-        
+        options.add_argument("--headless")  # <-- ADD THIS LINE
+
         # Basic stealth options
         options.add_argument('--disable-blink-features=AutomationControlled')
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option('useAutomationExtension', False)
+        # options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        # options.add_experimental_option('useAutomationExtension', False)
         options.add_argument('--no-first-run')
         options.add_argument('--no-service-autorun')
         options.add_argument('--password-store=basic')
@@ -97,7 +98,8 @@ class AndurilScraper:
         options.add_argument(f'--window-size={fingerprint_profile.viewport[0]},{fingerprint_profile.viewport[1]}')
         
         # Create driver
-        driver = webdriver.Chrome(options=options)
+        driver = webdriver.Firefox(options=options)
+
         
         # Execute stealth JavaScript
         driver.execute_script("""
@@ -184,7 +186,7 @@ class AndurilScraper:
         return all_jobs
     
     @retry_with_backoff()
-    def _navigate_to_page(self, driver: webdriver.Chrome):
+    def _navigate_to_page(self, driver: webdriver.Firefox):
         """Navigate to careers page with retry logic"""
         try:
             driver.get(self.base_url)
@@ -204,7 +206,7 @@ class AndurilScraper:
             )
             raise
     
-    def _scrape_current_page(self, driver: webdriver.Chrome) -> List[JobPosting]:
+    def _scrape_current_page(self, driver: webdriver.Firefox) -> List[JobPosting]:
         """Scrape jobs from the current page"""
         jobs = []
         
@@ -259,7 +261,7 @@ class AndurilScraper:
             
         return jobs
     
-    def _extract_job_info(self, driver: webdriver.Chrome, job_element) -> Optional[JobPosting]:
+    def _extract_job_info(self, driver: webdriver.Firefox, job_element) -> Optional[JobPosting]:
         """Extract job information from a job listing element"""
         try:
             # These selectors would need to be customized based on Anduril's actual HTML structure
@@ -306,7 +308,7 @@ class AndurilScraper:
             logger.warning(f"Failed to extract job info: {e}")
             return None
     
-    def _get_job_details(self, driver: webdriver.Chrome, job_url: str) -> tuple[str, List[str]]:
+    def _get_job_details(self, driver: webdriver.Firefox, job_url: str) -> tuple[str, List[str]]:
         """Get detailed job description and requirements"""
         try:
             # Navigate to job detail page

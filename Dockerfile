@@ -6,15 +6,27 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# Install Firefox ESR and all necessary system dependencies for it to run headlessly
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
     curl \
+    firefox-esr \
+    # Add all required libraries for headless Firefox
+    libgtk-3-0 \
+    libasound2 \
+    libdbus-glib-1-2 \
+    xvfb \
+    libxtst6 \
+    libxt6 \
+    libxrandr2 \
+    libnss3 \
+    libnspr4 \
   && rm -rf /var/lib/apt/lists/*
 
 # Copy minimal files first for dependency layer caching
 COPY pyproject.toml README.md ./
-RUN pip install --upgrade pip && pip install .[dev] || pip install .
+RUN pip install --upgrade pip && pip install .[dev]
 
 # Copy the rest of the source
 COPY . .

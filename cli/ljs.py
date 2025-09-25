@@ -901,9 +901,8 @@ def resume_activate(resume_id: str):
 @companies_app.command('seed')
 def companies_seed(file: Path, update: bool = typer.Option(False, help="Update existing companies")):
     """Seed companies from CSV or JSON file"""
-    from libs.companies import create_company_seeding_service
+    from libs.companies.seeding import create_company_seeding_service
     from libs.db.session import get_session
-    import asyncio
     
     ctx = pass_context.get()
     
@@ -911,36 +910,33 @@ def companies_seed(file: Path, update: bool = typer.Option(False, help="Update e
         console.print(f"[red]Seed file not found: {file}[/red]")
         raise typer.Exit(1)
     
-    async def seed_companies():
-        try:
-            session = get_session()
+    try:
+        console.print(f"[cyan]Starting company seeding from: {file}[/cyan]")
+
+        if ctx.dry_run:
+            console.print("[yellow]DRY RUN: Company seeding simulation[/yellow]")
+            # In dry run, you might want to parse the file to show what would happen
+            # but for now, we just exit.
+            return
+
+        with get_session() as session:
             seeding_service = create_company_seeding_service(session)
-            
-            console.print(f"[cyan]Starting company seeding from: {file}[/cyan]")
-            
-            if ctx.dry_run:
-                console.print("[yellow]DRY RUN: Company seeding simulation[/yellow]")
-                # In dry run, just parse and show what would be seeded
-                return
-            
-            stats = await seeding_service.seed_companies_from_file(file, update_existing=update)
-            
+            stats = seeding_service.seed_companies_from_file(file, update_existing=update)
+
             console.print(f"[green]✅ Company seeding completed![/green]")
             console.print(f"[cyan]Companies read: {stats.companies_read}[/cyan]")
             console.print(f"[cyan]Companies created: {stats.companies_created}[/cyan]")
             console.print(f"[cyan]Companies updated: {stats.companies_updated}[/cyan]")
             console.print(f"[cyan]Companies deduplicated: {stats.companies_deduplicated}[/cyan]")
-            
+
             if stats.errors:
                 console.print(f"[yellow]Errors encountered: {len(stats.errors)}[/yellow]")
                 for error in stats.errors[:5]:
                     console.print(f"[red]  • {error}[/red]")
-                
-        except Exception as e:
-            console.print(f"[red]Company seeding failed: {e}[/red]")
-            raise typer.Exit(1)
-    
-    asyncio.run(seed_companies())
+            
+    except Exception as e:
+        console.print(f"[red]Company seeding failed: {e}[/red]")
+        raise typer.Exit(1)
 
 @companies_app.command('list')
 def companies_list():

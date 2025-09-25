@@ -1,0 +1,33 @@
+# -- FAANG & Big Tech --
+Google
+Apple
+Meta
+Amazon
+Netflix
+Microsoft
+NVIDIA
+Tesla
+
+# -- Top Startups & Unicorns --
+OpenAI
+Anthropic
+Databricks
+Scale AI
+Anduril Industries
+Palantir Technologies
+SpaceX
+Stripe
+Rippling
+Brex
+
+# -- Fintech --
+Coinbase
+Block
+Plaid
+Chime
+Robinhood
+Affirm
+Klarna
+Revolut
+Nubank
+Adyen

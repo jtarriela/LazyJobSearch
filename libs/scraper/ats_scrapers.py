@@ -20,7 +20,7 @@ try:
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
-    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.firefox.options import Options
     from selenium.common.exceptions import TimeoutException, NoSuchElementException
     SELENIUM_AVAILABLE = True
 except ImportError as e:
@@ -165,14 +165,15 @@ class ATSScraper(ABC):
         
         return all_jobs
     
-    def _setup_driver(self, fingerprint_profile) -> webdriver.Chrome:
-        """Setup Chrome driver with anti-bot measures"""
+    def _setup_driver(self, fingerprint_profile) -> webdriver.Firefox:
+        """Setup Firefox driver with anti-bot measures"""
         options = Options()
+        options.add_argument("--headless")  # <-- ADD THIS LINE
         
         # Basic stealth options
         options.add_argument('--disable-blink-features=AutomationControlled')
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option('useAutomationExtension', False)
+        # options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        # options.add_experimental_option('useAutomationExtension', False)
         options.add_argument('--no-first-run')
         options.add_argument('--no-service-autorun')
         options.add_argument('--password-store=basic')
@@ -182,7 +183,8 @@ class ATSScraper(ABC):
         options.add_argument(f'--window-size={fingerprint_profile.viewport[0]},{fingerprint_profile.viewport[1]}')
         
         # Create driver
-        driver = webdriver.Chrome(options=options)
+        driver = webdriver.Firefox(options=options)
+
         
         # Execute stealth JavaScript
         driver.execute_script("""
@@ -195,7 +197,7 @@ class ATSScraper(ABC):
         return driver
     
     @retry_with_backoff()
-    def _navigate_to_page(self, driver: webdriver.Chrome, url: str):
+    def _navigate_to_page(self, driver: webdriver.Firefox, url: str):
         """Navigate to page with retry logic"""
         try:
             driver.get(url)
@@ -215,7 +217,7 @@ class ATSScraper(ABC):
             )
             raise
     
-    def _scrape_current_page(self, driver: webdriver.Chrome, company_domain: str) -> List[JobPosting]:
+    def _scrape_current_page(self, driver: webdriver.Firefox, company_domain: str) -> List[JobPosting]:
         """Scrape jobs from the current page"""
         jobs = []
         selectors = self.get_job_listing_selectors()
@@ -271,7 +273,7 @@ class ATSScraper(ABC):
         
         return jobs
     
-    def _extract_job_info(self, driver: webdriver.Chrome, job_element, company_domain: str) -> Optional[JobPosting]:
+    def _extract_job_info(self, driver: webdriver.Firefox, job_element, company_domain: str) -> Optional[JobPosting]:
         """Extract job information from a job listing element"""
         try:
             selectors = self.get_job_listing_selectors()
@@ -345,7 +347,7 @@ class ATSScraper(ABC):
         
         return None
     
-    def _extract_job_description(self, driver: webdriver.Chrome, job_element, job_url: str, 
+    def _extract_job_description(self, driver: webdriver.Firefox, job_element, job_url: str, 
                                 selectors: Dict[str, str]) -> str:
         """Extract job description (may require navigation to detail page)"""
         # Try to get description from listing page first
