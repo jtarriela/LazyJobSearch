@@ -1,0 +1,2365 @@
+"""
+API Client Implementation for Job Aggregators
+Production-ready clients with rate limiting and error handling
+"""
+import os
+import time
+import logging
+from typing import List, Dict, Optional, Any
+from datetime import datetime, timedelta
+from dataclasses import dataclass
+from enum import Enum
+import hashlib
+import json
+
+import httpx
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from cachetools import TTLCache
+from urllib.parse import urlencode, quote
+
+logger = logging.getLogger(__name__)
+
+
+class APIProvider(Enum):
+    INDEED = "indeed"
+    ADZUNA = "adzuna"
+    REMOTEOK = "remoteok"
+    USAJOBS = "usajobs"
+    THEMUSE = "themuse"
+    JOOBLE = "jooble"
+
+
+@dataclass
+class APIConfig:
+    """Configuration for API client"""
+    provider: APIProvider
+    api_key: Optional[str] = None
+    app_id: Optional[str] = None
+    rate_limit_per_hour: int = 100
+    cache_ttl_seconds: int = 3600
+    timeout_seconds: int = 30
+    max_retries: int = 3
+
+
+@dataclass
+class JobListing:
+    """Standardized job listing from any API"""
+    title: str
+    company: str
+    location: str
+    url: str
+    description: str
+    source: str
+    external_id: str
+    posted_date: Optional[datetime] = None
+    salary_min: Optional[float] = None
+    salary_max: Optional[float] = None
+    job_type: Optional[str] = None
+    remote: Optional[bool] = None
+    tags: Optional[List[str]] = None
+    
+    def to_dict(self) -> Dict:
+        """Convert to dictionary for database storage"""
+        return {
+            'title': self.title,
+            'company': self.company,
+            'location': self.location,
+            'url': self.url,
+            'description': self.description,
+            'source': self.source,
+            'external_id': self.external_id,
+            'posted_date': self.posted_date.isoformat() if self.posted_date else None,
+            'salary_range': self._format_salary(),
+            'job_type': self.job_type,
+            'remote': self.remote,
+            'tags': ','.join(self.tags) if self.tags else None
+        }
+    
+    def _format_salary(self) -> Optional[str]:
+        """Format salary range as string"""
+        if self.salary_min and self.salary_max:
+            return f"${self.salary_min:,.0f}-${self.salary_max:,.0f}"
+        elif self.salary_min:
+            return f"${self.salary_min:,.0f}+"
+        elif self.salary_max:
+            return f"Up to ${self.salary_max:,.0f}"
+        return None
+
+
+class RateLimiter:
+    """Simple rate limiter for API calls"""
+    
+    def __init__(self, calls_per_hour: int):
+        self.calls_per_hour = calls_per_hour
+        self.call_times: List[datetime] = []
+    
+    def wait_if_needed(self):
+        """Wait if we've exceeded rate limit"""
+        now = datetime.now()
+        hour_ago = now - timedelta(hours=1)
+        
+        # Remove old calls
+        self.call_times = [t for t in self.call_times if t > hour_ago]
+        
+        if len(self.call_times) >= self.calls_per_hour:
+            # Calculate wait time
+            oldest_call = self.call_times[0]
+            wait_until = oldest_call + timedelta(hours=1)
+            wait_seconds = (wait_until - now).total_seconds()
+            
+            if wait_seconds > 0:
+                logger.info(f"Rate limit reached, waiting {wait_seconds:.1f} seconds")
+                time.sleep(wait_seconds)
+        
+        self.call_times.append(now)
+
+
+class BaseAPIClient:
+    """Base class for all API clients"""
+    
+    def __init__(self, config: APIConfig):
+        self.config = config
+        self.client = httpx.Client(timeout=config.timeout_seconds)
+        self.rate_limiter = RateLimiter(config.rate_limit_per_hour)
+        self.cache = TTLCache(maxsize=1000, ttl=config.cache_ttl_seconds)
+    
+    def _get_cache_key(self, **params) -> str:
+        """Generate cache key from parameters"""
+        param_str = json.dumps(params, sort_keys=True)
+        return hashlib.md5(param_str.encode()).hexdigest()
+    
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=60),
+        retry=retry_if_exception_type(httpx.HTTPStatusError)
+    )
+    def _make_request(self, url: str, params: Dict) -> Dict:
+        """Make API request with retry logic"""
+        self.rate_limiter.wait_if_needed()
+        
+        response = self.client.get(url, params=params)
+        response.raise_for_status()
+        
+        return response.json()
+    
+    def search(self, query: str, location: str = "", **kwargs) -> List[JobListing]:
+        """Search for jobs - to be implemented by subclasses"""
+        raise NotImplementedError
+
+
+class IndeedClient(BaseAPIClient):
+    """Indeed Publisher API Client"""
+    
+    BASE_URL = "https://api.indeed.com/ads/apisearch"
+    
+    def __init__(self, publisher_id: str):
+        config = APIConfig(
+            provider=APIProvider.INDEED,
+            api_key=publisher_id,
+            rate_limit_per_hour=100
+        )
+        super().__init__(config)
+        self.publisher_id = publisher_id
+    
+    def search(self, 
+              query: str, 
+              location: str = "Remote",
+              limit: int = 50,
+              days_back: int = 7,
+              job_type: Optional[str] = None) -> List[JobListing]:
+        """
+        Search Indeed for jobs
+        
+        Args:
+            query: Search query (e.g., "python developer")
+            location: Location or "Remote"
+            limit: Maximum number of results
+            days_back: How many days back to search
+            job_type: fulltime, parttime, contract, internship, temporary
+        """
+        # Check cache
+        cache_key = self._get_cache_key(
+            query=query, location=location, limit=limit, days_back=days_back
+        )
+        if cache_key in self.cache:
+            logger.info(f"Indeed cache hit for query: {query}")
+            return self.cache[cache_key]
+        
+        jobs = []
+        start = 0
+        
+        while len(jobs) < limit:
+            params = {
+                'publisher': self.publisher_id,
+                'v': '2',
+                'format': 'json',
+                'q': query,
+                'l': location,
+                'sort': 'date',
+                'start': start,
+                'limit': min(25, limit - len(jobs)),  # Indeed max is 25
+                'fromage': days_back,  # Days back
+                'latlong': 1,  # Include lat/long
+                'co': 'us'  # Country
+            }
+            
+            if job_type:
+                params['jt'] = job_type
+            
+            try:
+                data = self._make_request(self.BASE_URL, params)
+                
+                if 'results' not in data:
+                    break
+                
+                for job_data in data['results']:
+                    job = self._parse_job(job_data)
+                    if job:
+                        jobs.append(job)
+                
+                # Check if more pages available
+                total_results = data.get('totalResults', 0)
+                if start + 25 >= total_results or len(data['results']) == 0:
+                    break
+                
+                start += 25
+                
+            except Exception as e:
+                logger.error(f"Indeed API error: {e}")
+                break
+        
+        # Cache results
+        self.cache[cache_key] = jobs
+        logger.info(f"Indeed returned {len(jobs)} jobs for query: {query}")
+        
+        return jobs
+    
+    def _parse_job(self, data: Dict) -> Optional[JobListing]:
+        """Parse Indeed job data into standardized format"""
+        try:
+            # Parse date
+            posted_date = None
+            if 'date' in data:
+                try:
+                    posted_date = datetime.strptime(data['date'], '%a, %d %b %Y %H:%M:%S %Z')
+                except:
+                    pass
+            
+            return JobListing(
+                title=data.get('jobtitle', ''),
+                company=data.get('company', ''),
+                location=data.get('formattedLocation', ''),
+                url=data.get('url', ''),
+                description=data.get('snippet', ''),
+                source='indeed',
+                external_id=data.get('jobkey', ''),
+                posted_date=posted_date,
+                job_type=self._map_job_type(data.get('jobtype')),
+                remote='remote' in data.get('formattedLocation', '').lower()
+            )
+        except Exception as e:
+            logger.warning(f"Failed to parse Indeed job: {e}")
+            return None
+    
+    def _map_job_type(self, indeed_type: Optional[str]) -> Optional[str]:
+        """Map Indeed job type to standard format"""
+        if not indeed_type:
+            return None
+        
+        mapping = {
+            'fulltime': 'full-time',
+            'parttime': 'part-time',
+            'contract': 'contract',
+            'internship': 'internship',
+            'temporary': 'temporary'
+        }
+        
+        return mapping.get(indeed_type.lower(), indeed_type)
+
+
+class AdzunaClient(BaseAPIClient):
+    """Adzuna API Client"""
+    
+    BASE_URL = "https://api.adzuna.com/v1/api/jobs"
+    
+    def __init__(self, app_id: str, api_key: str, country: str = 'us'):
+        config = APIConfig(
+            provider=APIProvider.ADZUNA,
+            app_id=app_id,
+            api_key=api_key,
+            rate_limit_per_hour=250  # Adzuna is generous
+        )
+        super().__init__(config)
+        self.app_id = app_id
+        self.api_key = api_key
+        self.country = country
+    
+    def search(self,
+              query: str,
+              location: str = "",
+              limit: int = 50,
+              days_back: int = 7,
+              salary_min: Optional[int] = None,
+              full_time: Optional[bool] = None,
+              remote_only: bool = False) -> List[JobListing]:
+        """
+        Search Adzuna for jobs
+        
+        Args:
+            query: Search query
+            location: Location string
+            limit: Maximum results
+            days_back: How far back to search
+            salary_min: Minimum salary filter
+            full_time: Full-time only filter
+            remote_only: Remote jobs only
+        """
+        # Check cache
+        cache_key = self._get_cache_key(
+            query=query, location=location, limit=limit, 
+            days_back=days_back, salary_min=salary_min
+        )
+        if cache_key in self.cache:
+            logger.info(f"Adzuna cache hit for query: {query}")
+            return self.cache[cache_key]
+        
+        jobs = []
+        page = 1
+        
+        while len(jobs) < limit:
+            params = {
+                'app_id': self.app_id,
+                'app_key': self.api_key,
+                'results_per_page': min(50, limit - len(jobs)),
+                'what': query,
+                'content-type': 'application/json',
+                'max_days_old': days_back
+            }
+            
+            if location:
+                params['where'] = location
+            
+            if salary_min:
+                params['salary_min'] = salary_min
+            
+            if full_time is not None:
+                params['full_time'] = '1' if full_time else '0'
+                
+            if remote_only:
+                params['what'] = f"{query} remote"
+            
+            url = f"{self.BASE_URL}/{self.country}/search/{page}"
+            
+            try:
+                data = self._make_request(url, params)
+                
+                if 'results' not in data:
+                    break
+                
+                for job_data in data['results']:
+                    job = self._parse_job(job_data)
+                    if job:
+                        jobs.append(job)
+                
+                # Check if more pages
+                total_count = data.get('count', 0)
+                if page * 50 >= total_count or len(data['results']) == 0:
+                    break
+                
+                page += 1
+                
+            except Exception as e:
+                logger.error(f"Adzuna API error: {e}")
+                break
+        
+        # Cache results
+        self.cache[cache_key] = jobs
+        logger.info(f"Adzuna returned {len(jobs)} jobs for query: {query}")
+        
+        return jobs
+    
+    def _parse_job(self, data: Dict) -> Optional[JobListing]:
+        """Parse Adzuna job data"""
+        try:
+            # Parse date
+            posted_date = None
+            if 'created' in data:
+                posted_date = datetime.fromisoformat(data['created'].replace('Z', '+00:00'))
+            
+            # Extract salary
+            salary_min = data.get('salary_min')
+            salary_max = data.get('salary_max')
+            
+            # Parse location
+            location_data = data.get('location', {})
+            location = location_data.get('display_name', '')
+            
+            return JobListing(
+                title=data.get('title', ''),
+                company=data.get('company', {}).get('display_name', ''),
+                location=location,
+                url=data.get('redirect_url', ''),
+                description=data.get('description', ''),
+                source='adzuna',
+                external_id=str(data.get('id', '')),
+                posted_date=posted_date,
+                salary_min=salary_min,
+                salary_max=salary_max,
+                tags=data.get('category', {}).get('tag', '').split(',') if data.get('category') else None
+            )
+        except Exception as e:
+            logger.warning(f"Failed to parse Adzuna job: {e}")
+            return None
+
+
+class RemoteOKClient(BaseAPIClient):
+    """RemoteOK API Client - for remote jobs"""
+    
+    BASE_URL = "https://remoteok.io/api"
+    
+    def __init__(self, api_key: Optional[str] = None):
+        config = APIConfig(
+            provider=APIProvider.REMOTEOK,
+            api_key=api_key,
+            rate_limit_per_hour=60
+        )
+        super().__init__(config)
+    
+    def search(self, 
+              query: str = "",
+              tags: Optional[List[str]] = None,
+              limit: int = 50) -> List[JobListing]:
+        """
+        Search RemoteOK for remote jobs
+        
+        Args:
+            query: Search query (searches in tags)
+            tags: List of tags to filter by
+            limit: Maximum results
+        """
+        # RemoteOK doesn't have traditional search, uses tags
+        search_tags = []
+        if query:
+            search_tags.extend(query.lower().split())
+        if tags:
+            search_tags.extend(tags)
+        
+        # Check cache
+        cache_key = self._get_cache_key(tags=','.join(search_tags), limit=limit)
+        if cache_key in self.cache:
+            logger.info(f"RemoteOK cache hit for tags: {search_tags}")
+            return self.cache[cache_key]
+        
+        jobs = []
+        
+        try:
+            # RemoteOK returns all jobs, we filter client-side
+            response = self._make_request(self.BASE_URL, {})
+            
+            # First item is metadata, skip it
+            job_data_list = response[1:] if isinstance(response, list) else []
+            
+            for job_data in job_data_list[:limit * 2]:  # Get extra to filter
+                job = self._parse_job(job_data)
+                
+                if job and self._matches_tags(job, search_tags):
+                    jobs.append(job)
+                    
+                if len(jobs) >= limit:
+                    break
+                    
+        except Exception as e:
+            logger.error(f"RemoteOK API error: {e}")
+        
+        # Cache results
+        self.cache[cache_key] = jobs
+        logger.info(f"RemoteOK returned {len(jobs)} jobs for tags: {search_tags}")
+        
+        return jobs
+    
+    def _parse_job(self, data: Dict) -> Optional[JobListing]:
+        """Parse RemoteOK job data"""
+        try:
+            # Parse date (epoch timestamp)
+            posted_date = None
+            if 'date' in data:
+                posted_date = datetime.fromtimestamp(data['date'])
+            
+            # Parse salary
+            salary_min = data.get('salary_min')
+            salary_max = data.get('salary_max')
+            
+            # Build description
+            description_parts = []
+            if data.get('description'):
+                description_parts.append(data['description'])
+            if data.get('benefits'):
+                description_parts.append(f"Benefits: {data['benefits']}")
+            
+            return JobListing(
+                title=data.get('position', ''),
+                company=data.get('company', ''),
+                location=data.get('location', 'Remote'),
+                url=data.get('apply_url', data.get('url', '')),
+                description='\n\n'.join(description_parts),
+                source='remoteok',
+                external_id=data.get('id', ''),
+                posted_date=posted_date,
+                salary_min=salary_min,
+                salary_max=salary_max,
+                remote=True,
+                tags=data.get('tags', [])
+            )
+        except Exception as e:
+            logger.warning(f"Failed to parse RemoteOK job: {e}")
+            return None
+    
+    def _matches_tags(self, job: JobListing, search_tags: List[str]) -> bool:
+        """Check if job matches search tags"""
+        if not search_tags:
+            return True
+        
+        job_text = f"{job.title} {job.company} {job.description}".lower()
+        job_tags = [tag.lower() for tag in job.tags] if job.tags else []
+        
+        for tag in search_tags:
+            if tag in job_text or tag in job_tags:
+                return True
+        
+        return False
+
+
+class UnifiedJobAPI:
+    """Unified interface for all job APIs"""
+    
+    def __init__(self):
+        self.clients = {}
+        
+        # Initialize Indeed
+        indeed_key = os.getenv('INDEED_PUBLISHER_ID')
+        if indeed_key:
+            self.clients['indeed'] = IndeedClient(indeed_key)
+            logger.info("Indeed API client initialized")
+        
+        # Initialize Adzuna
+        adzuna_app = os.getenv('ADZUNA_APP_ID')
+        adzuna_key = os.getenv('ADZUNA_API_KEY')
+        if adzuna_app and adzuna_key:
+            self.clients['adzuna'] = AdzunaClient(adzuna_app, adzuna_key)
+            logger.info("Adzuna API client initialized")
+        
+        # Initialize RemoteOK
+        remoteok_key = os.getenv('REMOTEOK_API_KEY')
+        self.clients['remoteok'] = RemoteOKClient(remoteok_key)
+        logger.info("RemoteOK API client initialized")
+    
+    def search_all(self, 
+                  query: str,
+                  location: str = "Remote",
+                  limit_per_api: int = 25,
+                  **kwargs) -> Dict[str, List[JobListing]]:
+        """
+        Search all available APIs
+        
+        Returns:
+            Dictionary mapping API name to list of jobs
+        """
+        results = {}
+        
+        for name, client in self.clients.items():
+            try:
+                logger.info(f"Searching {name} for: {query}")
+                jobs = client.search(query, location, limit=limit_per_api, **kwargs)
+                results[name] = jobs
+                logger.info(f"{name} returned {len(jobs)} jobs")
+            except Exception as e:
+                logger.error(f"Error searching {name}: {e}")
+                results[name] = []
+        
+        return results
+    
+    def aggregate_results(self,
+                         query: str, 
+                         location: str = "Remote",
+                         total_limit: int = 100,
+                         deduplicate: bool = True) -> List[JobListing]:
+        """
+        Aggregate and deduplicate results from all APIs
+        
+        Args:
+            query: Search query
+            location: Location filter
+            total_limit: Total jobs to return
+            deduplicate: Remove duplicate jobs
+        """
+        # Calculate per-API limit
+        api_count = len(self.clients)
+        per_api_limit = max(25, total_limit // api_count)
+        
+        # Search all APIs
+        all_results = self.search_all(query, location, limit_per_api=per_api_limit)
+        
+        # Combine results
+        all_jobs = []
+        for api_jobs in all_results.values():
+            all_jobs.extend(api_jobs)
+        
+        # Deduplicate if requested
+        if deduplicate:
+            seen_urls = set()
+            seen_titles = set()
+            deduped_jobs = []
+            
+            for job in all_jobs:
+                # Dedupe by URL first
+                if job.url in seen_urls:
+                    continue
+                    
+                # Then by company + title combo
+                title_key = f"{job.company}:{job.title}"
+                if title_key in seen_titles:
+                    continue
+                
+                seen_urls.add(job.url)
+                seen_titles.add(title_key)
+                deduped_jobs.append(job)
+            
+            logger.info(f"Deduplicated {len(all_jobs)} jobs to {len(deduped_jobs)}")
+            all_jobs = deduped_jobs
+        
+        # Sort by posted date (newest first)
+        all_jobs.sort(key=lambda x: x.posted_date or datetime.min, reverse=True)
+        
+        # Limit results
+        return all_jobs[:total_limit]
+
+
+# Usage example
+if __name__ == "__main__":
+    import asyncio
+    from rich import print as rprint
+    
+    # Initialize unified API
+    api = UnifiedJobAPI()
+    
+    # Search for Python jobs
+    results = api.aggregate_results(
+        query="python senior backend",
+        location="United States",
+        total_limit=50
+    )
+    
+    # Display results
+    for i, job in enumerate(results[:10], 1):
+        rprint(f"\n[bold]{i}. {job.title}[/bold]")
+        rprint(f"   Company: {job.company}")
+        rprint(f"   Location: {job.location}")
+        rprint(f"   Source: {job.source}")
+        rprint(f"   Posted: {job.posted_date}")
+        if job.salary_min or job.salary_max:
+            rprint(f"   Salary: {job._format_salary()}")
+
+
+#-------------------
+# next file 
+#
+"""
+Production-Ready ATS Scraper Base Class
+Fixes: Headless detection, proper retries, smart browser management
+"""
+from __future__ import annotations
+import os
+import time
+import random
+import logging
+from typing import List, Dict, Any, Optional, Tuple
+from dataclasses import dataclass
+from datetime import datetime
+from abc import ABC, abstractmethod
+from contextlib import contextmanager
+
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.firefox.options import Options as FirefoxOptions
+from selenium.webdriver.chrome.options import Options as ChromeOptions
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
+from selenium.webdriver.common.action_chains import ActionChains
+from undetected_chromedriver import Chrome as UndetectedChrome
+import undetected_chromedriver as uc
+
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ScraperConfig:
+    """Configuration for scraper behavior"""
+    use_headless: bool = False  # Default to headed for better success
+    use_undetected: bool = True  # Use undetected-chromedriver
+    use_playwright: bool = False  # Fallback to Playwright
+    max_pages: int = 10
+    page_delay_range: Tuple[float, float] = (2.0, 5.0)
+    scroll_behavior: bool = True
+    mouse_movement: bool = True
+    random_clicks: bool = True
+    viewport_size: Optional[Tuple[int, int]] = None
+    proxy: Optional[str] = None
+    user_data_dir: Optional[str] = None  # Reuse browser profile
+    
+
+class BrowserManager:
+    """Manages browser instances with anti-detection measures"""
+    
+    def __init__(self, config: ScraperConfig):
+        self.config = config
+        self.driver = None
+        self.playwright = None
+        self.browser = None
+        
+    @contextmanager
+    def get_driver(self):
+        """Context manager for browser lifecycle"""
+        try:
+            if self.config.use_playwright:
+                yield self._setup_playwright()
+            elif self.config.use_undetected:
+                yield self._setup_undetected_chrome()
+            else:
+                yield self._setup_standard_chrome()
+        finally:
+            self._cleanup()
+    
+    def _setup_undetected_chrome(self) -> webdriver.Chrome:
+        """Setup undetected-chromedriver (best for tough sites)"""
+        options = uc.ChromeOptions()
+        
+        # Only use headless if explicitly safe
+        if self.config.use_headless:
+            options.add_argument('--headless=new')  # Use new headless mode
+        
+        # Anti-detection arguments
+        options.add_argument('--disable-blink-features=AutomationControlled')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-web-security')
+        options.add_argument('--disable-features=VizDisplayCompositor')
+        
+        # Random viewport
+        if self.config.viewport_size:
+            width, height = self.config.viewport_size
+        else:
+            width = random.randint(1200, 1920)
+            height = random.randint(900, 1080)
+        options.add_argument(f'--window-size={width},{height}')
+        
+        # User agent rotation
+        user_agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        ]
+        options.add_argument(f'--user-agent={random.choice(user_agents)}')
+        
+        # Proxy support
+        if self.config.proxy:
+            options.add_argument(f'--proxy-server={self.config.proxy}')
+        
+        # Profile persistence (maintains cookies/session)
+        if self.config.user_data_dir:
+            options.add_argument(f'--user-data-dir={self.config.user_data_dir}')
+        else:
+            # Use temp profile
+            import tempfile
+            temp_dir = tempfile.mkdtemp(prefix='chrome_profile_')
+            options.add_argument(f'--user-data-dir={temp_dir}')
+        
+        # Create driver with version management
+        driver = uc.Chrome(options=options, version_main=120)
+        
+        # Additional stealth JavaScript
+        self._inject_stealth_js(driver)
+        
+        self.driver = driver
+        return driver
+    
+    def _setup_standard_chrome(self) -> webdriver.Chrome:
+        """Fallback to standard Chrome with protections"""
+        options = ChromeOptions()
+        
+        # Never use headless for standard Chrome on tough sites
+        if self.config.use_headless:
+            logger.warning("Headless mode not recommended for standard Chrome")
+        
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option('useAutomationExtension', False)
+        options.add_argument('--disable-blink-features=AutomationControlled')
+        
+        driver = webdriver.Chrome(options=options)
+        self._inject_stealth_js(driver)
+        
+        self.driver = driver
+        return driver
+    
+    async def _setup_playwright(self):
+        """Setup Playwright browser (async fallback option)"""
+        self.playwright = await async_playwright().start()
+        
+        # Use Chromium with stealth
+        self.browser = await self.playwright.chromium.launch(
+            headless=self.config.use_headless,
+            args=[
+                '--disable-blink-features=AutomationControlled',
+                '--disable-features=site-per-process'
+            ]
+        )
+        
+        context = await self.browser.new_context(
+            viewport={'width': 1920, 'height': 1080},
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        )
+        
+        page = await context.new_page()
+        
+        # Inject stealth scripts
+        await page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+        """)
+        
+        return page
+    
+    def _inject_stealth_js(self, driver):
+        """Inject JavaScript to avoid detection"""
+        stealth_js = """
+        // Remove webdriver property
+        Object.defineProperty(navigator, 'webdriver', {
+            get: () => undefined
+        });
+        
+        // Override permissions
+        const originalQuery = window.navigator.permissions.query;
+        window.navigator.permissions.query = (parameters) => (
+            parameters.name === 'notifications' ?
+                Promise.resolve({ state: Notification.permission }) :
+                originalQuery(parameters)
+        );
+        
+        // Fix Chrome runtime
+        Object.defineProperty(navigator, 'plugins', {
+            get: () => [1, 2, 3, 4, 5]
+        });
+        
+        // Fix languages
+        Object.defineProperty(navigator, 'languages', {
+            get: () => ['en-US', 'en']
+        });
+        
+        // Override canvas fingerprint
+        const originalGetContext = HTMLCanvasElement.prototype.getContext;
+        HTMLCanvasElement.prototype.getContext = function(type, ...args) {
+            if (type === '2d') {
+                const context = originalGetContext.call(this, type, ...args);
+                const originalFillText = context.fillText;
+                context.fillText = function(...args) {
+                    args[0] = args[0] + String.fromCharCode(0);
+                    return originalFillText.call(this, ...args);
+                };
+                return context;
+            }
+            return originalGetContext.call(this, type, ...args);
+        };
+        """
+        
+        driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
+            'source': stealth_js
+        })
+    
+    def _cleanup(self):
+        """Clean up browser resources"""
+        try:
+            if self.driver:
+                self.driver.quit()
+            if self.browser:
+                self.browser.close()
+            if self.playwright:
+                self.playwright.stop()
+        except Exception as e:
+            logger.warning(f"Cleanup error: {e}")
+
+
+class HumanLikeBehavior:
+    """Simulate human-like interaction patterns"""
+    
+    @staticmethod
+    def random_sleep(min_seconds: float = 0.5, max_seconds: float = 2.0):
+        """Human-like random delay"""
+        time.sleep(random.uniform(min_seconds, max_seconds))
+    
+    @staticmethod
+    def smooth_scroll(driver, pixels: int = None):
+        """Smooth scrolling with variable speed"""
+        if pixels is None:
+            pixels = random.randint(300, 700)
+        
+        # Scroll in small increments
+        increments = random.randint(3, 7)
+        for i in range(increments):
+            scroll_amount = pixels // increments
+            driver.execute_script(f"window.scrollBy(0, {scroll_amount});")
+            time.sleep(random.uniform(0.1, 0.3))
+    
+    @staticmethod
+    def human_mouse_movement(driver, element=None):
+        """Simulate human-like mouse movement with Bezier curves"""
+        action = ActionChains(driver)
+        
+        # Get current position (approximate)
+        if element:
+            # Move to element with curve
+            offset_x = random.randint(-5, 5)
+            offset_y = random.randint(-5, 5)
+            
+            # Create intermediate points for Bezier-like movement
+            steps = random.randint(2, 4)
+            for i in range(steps):
+                intermediate_x = random.randint(-20, 20)
+                intermediate_y = random.randint(-20, 20)
+                action.move_by_offset(intermediate_x, intermediate_y)
+                action.pause(random.uniform(0.01, 0.05))
+            
+            action.move_to_element_with_offset(element, offset_x, offset_y)
+        else:
+            # Random movement
+            for _ in range(random.randint(1, 3)):
+                x = random.randint(-100, 100)
+                y = random.randint(-100, 100)
+                action.move_by_offset(x, y)
+                action.pause(random.uniform(0.1, 0.3))
+        
+        action.perform()
+    
+    @staticmethod
+    def random_interactions(driver):
+        """Perform random human-like interactions"""
+        interactions = [
+            lambda: HumanLikeBehavior.smooth_scroll(driver),
+            lambda: HumanLikeBehavior.human_mouse_movement(driver),
+            lambda: time.sleep(random.uniform(0.5, 1.5)),
+            lambda: driver.execute_script("window.scrollTo(0, 0);"),  # Scroll to top
+        ]
+        
+        # Perform 1-3 random interactions
+        for _ in range(random.randint(1, 3)):
+            random.choice(interactions)()
+            time.sleep(random.uniform(0.2, 0.5))
+
+
+class EnhancedATSScraper(ABC):
+    """Enhanced base class for all ATS scrapers"""
+    
+    def __init__(self, config: Optional[ScraperConfig] = None):
+        self.config = config or ScraperConfig()
+        self.browser_manager = BrowserManager(self.config)
+        self.behavior = HumanLikeBehavior()
+        self.retry_count = 0
+        self.last_request_time = None
+        
+    @abstractmethod
+    def get_job_listing_selectors(self) -> Dict[str, str]:
+        """Return CSS selectors for job listings"""
+        pass
+    
+    @abstractmethod
+    def parse_job_details(self, element) -> Dict[str, Any]:
+        """Parse job details from element"""
+        pass
+    
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=4, max=60),
+        retry=retry_if_exception_type(WebDriverException)
+    )
+    def scrape_jobs(self, url: str, max_jobs: int = 50) -> List[Dict]:
+        """Main scraping method with all protections"""
+        jobs = []
+        
+        with self.browser_manager.get_driver() as driver:
+            try:
+                # Navigate with retry protection
+                self._safe_navigate(driver, url)
+                
+                # Initial human behavior
+                self.behavior.random_interactions(driver)
+                
+                # Scrape with pagination
+                page_num = 0
+                while page_num < self.config.max_pages and len(jobs) < max_jobs:
+                    # Rate limiting
+                    self._enforce_rate_limit()
+                    
+                    # Extract jobs from current page
+                    page_jobs = self._extract_jobs_from_page(driver)
+                    jobs.extend(page_jobs)
+                    
+                    logger.info(f"Extracted {len(page_jobs)} jobs from page {page_num + 1}")
+                    
+                    # Try to go to next page
+                    if not self._go_to_next_page(driver):
+                        break
+                    
+                    page_num += 1
+                    
+                    # Human-like delay between pages
+                    delay = random.uniform(*self.config.page_delay_range)
+                    time.sleep(delay)
+                    
+                    # Random interactions
+                    if self.config.scroll_behavior and random.random() > 0.3:
+                        self.behavior.random_interactions(driver)
+                
+            except Exception as e:
+                logger.error(f"Scraping failed: {e}")
+                self._handle_failure(driver, e)
+                raise
+        
+        return jobs[:max_jobs]
+    
+    def _safe_navigate(self, driver, url: str):
+        """Navigate to URL with error handling"""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                driver.get(url)
+                
+                # Wait for page load
+                WebDriverWait(driver, 20).until(
+                    EC.presence_of_element_located((By.TAG_NAME, "body"))
+                )
+                
+                # Check for common block indicators
+                if self._is_blocked(driver):
+                    raise Exception("Detected blocking mechanism")
+                
+                return
+                
+            except TimeoutException:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Navigation timeout, retry {attempt + 1}")
+                    time.sleep(5 * (attempt + 1))
+                else:
+                    raise
+    
+    def _is_blocked(self, driver) -> bool:
+        """Check for common blocking indicators"""
+        indicators = [
+            "Access Denied",
+            "Blocked",
+            "403 Forbidden", 
+            "captcha",
+            "challenge",
+            "cf-browser-verification",
+            "Are you a robot"
+        ]
+        
+        page_source = driver.page_source.lower()
+        return any(ind.lower() in page_source for ind in indicators)
+    
+    def _enforce_rate_limit(self):
+        """Enforce rate limiting between requests"""
+        if self.last_request_time:
+            elapsed = time.time() - self.last_request_time
+            min_delay = 60.0 / 30  # Max 30 requests per minute
+            if elapsed < min_delay:
+                time.sleep(min_delay - elapsed)
+        
+        self.last_request_time = time.time()
+    
+    def _extract_jobs_from_page(self, driver) -> List[Dict]:
+        """Extract all jobs from current page"""
+        jobs = []
+        selectors = self.get_job_listing_selectors()
+        
+        try:
+            # Wait for job containers
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located(
+                    (By.CSS_SELECTOR, selectors['job_container'])
+                )
+            )
+            
+            job_elements = driver.find_elements(
+                By.CSS_SELECTOR, selectors['job_container']
+            )
+            
+            for element in job_elements:
+                try:
+                    # Scroll element into view
+                    driver.execute_script(
+                        "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", 
+                        element
+                    )
+                    time.sleep(random.uniform(0.1, 0.3))
+                    
+                    # Extract job data
+                    job_data = self.parse_job_details(element)
+                    if job_data:
+                        jobs.append(job_data)
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to extract job: {e}")
+                    continue
+                    
+        except TimeoutException:
+            logger.warning("No jobs found on page")
+            
+        return jobs
+    
+    def _go_to_next_page(self, driver) -> bool:
+        """Navigate to next page if available"""
+        next_selectors = [
+            'a[aria-label="Next"]',
+            'button[aria-label="Next"]',
+            '.next-page',
+            'a:contains("Next")',
+            'button:contains("Next")'
+        ]
+        
+        for selector in next_selectors:
+            try:
+                next_btn = driver.find_element(By.CSS_SELECTOR, selector)
+                if next_btn and next_btn.is_enabled():
+                    # Human-like click
+                    self.behavior.human_mouse_movement(driver, next_btn)
+                    time.sleep(random.uniform(0.1, 0.3))
+                    next_btn.click()
+                    
+                    # Wait for page to update
+                    time.sleep(random.uniform(2, 4))
+                    return True
+                    
+            except NoSuchElementException:
+                continue
+                
+        return False
+    
+    def _handle_failure(self, driver, exception: Exception):
+        """Handle scraping failures"""
+        # Take screenshot for debugging
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        screenshot_path = f"failures/screenshot_{timestamp}.png"
+        
+        try:
+            os.makedirs('failures', exist_ok=True)
+            driver.save_screenshot(screenshot_path)
+            
+            # Save page source
+            with open(f"failures/page_{timestamp}.html", 'w') as f:
+                f.write(driver.page_source)
+                
+            logger.info(f"Failure artifacts saved to {screenshot_path}")
+            
+        except Exception as e:
+            logger.warning(f"Could not save failure artifacts: {e}")
+
+
+# Example implementation for Greenhouse
+class ProductionGreenhouseScraper(EnhancedATSScraper):
+    """Production-ready Greenhouse scraper"""
+    
+    def get_job_listing_selectors(self) -> Dict[str, str]:
+        return {
+            'job_container': '.opening',
+            'title': 'a',
+            'location': '.location', 
+            'department': '.department',
+            'link': 'a'
+        }
+    
+    def parse_job_details(self, element) -> Dict[str, Any]:
+        """Parse Greenhouse job listing"""
+        try:
+            selectors = self.get_job_listing_selectors()
+            
+            title_elem = element.find_element(By.CSS_SELECTOR, selectors['title'])
+            title = title_elem.text.strip()
+            url = title_elem.get_attribute('href')
+            
+            location = self._safe_get_text(element, selectors['location'])
+            department = self._safe_get_text(element, selectors['department'])
+            
+            return {
+                'title': title,
+                'url': url,
+                'location': location,
+                'department': department,
+                'source': 'greenhouse',
+                'scraped_at': datetime.utcnow()
+            }
+            
+        except Exception as e:
+            logger.warning(f"Failed to parse job: {e}")
+            return None
+    
+    def _safe_get_text(self, element, selector: str) -> str:
+        """Safely extract text from element"""
+        try:
+            elem = element.find_element(By.CSS_SELECTOR, selector)
+            return elem.text.strip()
+        except:
+            return ""
+
+
+# Usage example
+def main():
+    """Example usage"""
+    # Configure for maximum stealth
+    config = ScraperConfig(
+        use_headless=False,  # Never use headless for tough sites
+        use_undetected=True,  # Use undetected-chromedriver
+        max_pages=5,
+        scroll_behavior=True,
+        mouse_movement=True,
+        random_clicks=True
+    )
+    
+    scraper = ProductionGreenhouseScraper(config)
+    
+    # Scrape jobs
+    jobs = scraper.scrape_jobs(
+        url='https://boards.greenhouse.io/databricks',
+        max_jobs=30
+    )
+    
+    print(f"Scraped {len(jobs)} jobs")
+    for job in jobs[:5]:
+        print(f"- {job['title']} in {job['location']}")
+
+
+if __name__ == "__main__":
+    main()
+
+#_------------next ife
+
+
+"""
+Enhanced Crawl Worker with Production-Ready Features
+Fixes: Deduplication, retry logic, fingerprinting, API fallback
+"""
+from __future__ import annotations
+import hashlib
+import json
+import logging
+from typing import List, Optional, Dict, Any, Tuple
+from datetime import datetime, timedelta
+from dataclasses import dataclass, asdict
+from enum import Enum
+import time
+from urllib.parse import urlparse, urljoin
+
+from sqlalchemy import select, and_, or_
+from sqlalchemy.dialects.postgresql import insert
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+import httpx
+from circuitbreaker import circuit
+
+from libs.db.session import get_session
+from libs.db import models
+from libs.scraper.anti_bot import ProxyPool, FingerprintGenerator, HumanBehaviorSimulator
+
+logger = logging.getLogger(__name__)
+
+
+class ScraperStrategy(Enum):
+    """Strategy for data acquisition"""
+    API_PRIMARY = "api_primary"      # Use API first
+    SCRAPE_ONLY = "scrape_only"      # Direct scraping
+    HYBRID = "hybrid"                # Try API, fallback to scraping
+
+
+class JobSource(Enum):
+    """Track where job came from"""
+    INDEED_API = "indeed_api"
+    ADZUNA_API = "adzuna_api"  
+    REMOTEOK_API = "remoteok_api"
+    GREENHOUSE = "greenhouse"
+    LEVER = "lever"
+    WORKDAY = "workday"
+    COMPANY_SITE = "company_site"
+    LINKEDIN = "linkedin"  # For future use only
+
+
+@dataclass
+class JobData:
+    """Unified job data structure"""
+    url: str
+    title: str
+    company: str
+    location: str
+    description: str
+    source: JobSource
+    external_id: Optional[str] = None  # API job ID
+    posted_date: Optional[datetime] = None
+    salary_range: Optional[str] = None
+    job_type: Optional[str] = None
+    seniority: Optional[str] = None
+    department: Optional[str] = None
+    skills: Optional[List[str]] = None
+    
+    def generate_fingerprint(self) -> str:
+        """Generate content fingerprint for change detection"""
+        content = f"{self.title}{self.description}{self.location}{self.salary_range or ''}"
+        return hashlib.sha256(content.encode()).hexdigest()[:32]
+    
+    def to_db_dict(self, company_id: str) -> Dict:
+        """Convert to database format"""
+        return {
+            'company_id': company_id,
+            'url': self.url,
+            'title': self.title,
+            'location': self.location,
+            'jd_fulltext': self.description,
+            'salary_range': self.salary_range,
+            'job_type': self.job_type,
+            'seniority': self.seniority or self._detect_seniority(),
+            'department': self.department,
+            'source': self.source.value,
+            'external_id': self.external_id,
+            'posted_date': self.posted_date,
+            'content_fingerprint': self.generate_fingerprint(),
+            'scraped_at': datetime.utcnow()
+        }
+    
+    def _detect_seniority(self) -> str:
+        """Auto-detect seniority from title/description"""
+        text = f"{self.title} {self.description[:500]}".lower()
+        
+        if any(kw in text for kw in ['senior', 'sr.', 'lead', 'principal', 'staff']):
+            return 'senior'
+        elif any(kw in text for kw in ['junior', 'jr.', 'entry', 'graduate', 'intern']):
+            return 'junior'
+        elif any(kw in text for kw in ['manager', 'director', 'vp', 'vice president', 'head of']):
+            return 'management'
+        else:
+            return 'mid'
+
+
+class APIAggregator:
+    """Aggregate jobs from multiple API sources"""
+    
+    def __init__(self):
+        self.client = httpx.Client(timeout=30.0)
+        self.indeed_key = os.getenv('INDEED_PUBLISHER_ID')
+        self.adzuna_app_id = os.getenv('ADZUNA_APP_ID')
+        self.adzuna_key = os.getenv('ADZUNA_API_KEY')
+    
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=60),
+        retry=retry_if_exception_type(httpx.HTTPStatusError)
+    )
+    def fetch_indeed_jobs(self, query: str, location: str = "Remote", 
+                         limit: int = 50) -> List[JobData]:
+        """Fetch jobs from Indeed Publisher API (free tier)"""
+        if not self.indeed_key:
+            logger.warning("Indeed API key not configured")
+            return []
+        
+        jobs = []
+        try:
+            params = {
+                'publisher': self.indeed_key,
+                'q': query,
+                'l': location,
+                'format': 'json',
+                'limit': min(limit, 25),  # Indeed max per request
+                'v': '2',
+                'sort': 'date'
+            }
+            
+            response = self.client.get(
+                'https://api.indeed.com/ads/apisearch',
+                params=params
+            )
+            response.raise_for_status()
+            
+            data = response.json()
+            for job in data.get('results', []):
+                jobs.append(JobData(
+                    url=job['url'],
+                    title=job['jobtitle'],
+                    company=job['company'],
+                    location=job.get('formattedLocation', ''),
+                    description=job.get('snippet', ''),  # Will need to fetch full
+                    source=JobSource.INDEED_API,
+                    external_id=job['jobkey'],
+                    posted_date=datetime.fromisoformat(job['date']) if 'date' in job else None
+                ))
+                
+        except Exception as e:
+            logger.error(f"Indeed API error: {e}")
+            
+        return jobs
+    
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=60)
+    )
+    def fetch_adzuna_jobs(self, query: str, location: str = "US",
+                         limit: int = 50) -> List[JobData]:
+        """Fetch jobs from Adzuna API (generous free tier)"""
+        if not self.adzuna_app_id:
+            logger.warning("Adzuna API not configured")
+            return []
+            
+        jobs = []
+        try:
+            params = {
+                'app_id': self.adzuna_app_id,
+                'app_key': self.adzuna_key,
+                'what': query,
+                'where': location,
+                'results_per_page': min(limit, 50),
+                'content-type': 'application/json'
+            }
+            
+            response = self.client.get(
+                f'https://api.adzuna.com/v1/api/jobs/us/search/1',
+                params=params
+            )
+            response.raise_for_status()
+            
+            data = response.json()
+            for job in data.get('results', []):
+                jobs.append(JobData(
+                    url=job['redirect_url'],
+                    title=job['title'],
+                    company=job['company']['display_name'],
+                    location=job['location']['display_name'],
+                    description=job.get('description', ''),
+                    source=JobSource.ADZUNA_API,
+                    external_id=str(job['id']),
+                    posted_date=datetime.fromisoformat(job['created']),
+                    salary_range=self._format_salary(job.get('salary_min'), job.get('salary_max'))
+                ))
+                
+        except Exception as e:
+            logger.error(f"Adzuna API error: {e}")
+            
+        return jobs
+    
+    def _format_salary(self, min_sal: Optional[float], max_sal: Optional[float]) -> Optional[str]:
+        """Format salary range"""
+        if min_sal and max_sal:
+            return f"${min_sal:,.0f} - ${max_sal:,.0f}"
+        elif min_sal:
+            return f"${min_sal:,.0f}+"
+        elif max_sal:
+            return f"Up to ${max_sal:,.0f}"
+        return None
+
+
+class SmartCrawlWorker:
+    """Enhanced crawl worker with deduplication and smart strategies"""
+    
+    def __init__(self, strategy: ScraperStrategy = ScraperStrategy.HYBRID):
+        self.strategy = strategy
+        self.api_aggregator = APIAggregator()
+        self.proxy_pool = ProxyPool(self._load_proxies())
+        self.fingerprint_gen = FingerprintGenerator()
+        self.behavior_sim = HumanBehaviorSimulator()
+        
+        # Circuit breaker for each domain
+        self.circuit_breakers: Dict[str, Any] = {}
+        
+        # Track scraping sessions
+        self.session_metrics = {
+            'api_success': 0,
+            'api_failed': 0,
+            'scrape_success': 0,
+            'scrape_failed': 0,
+            'duplicates_skipped': 0,
+            'jobs_updated': 0,
+            'jobs_created': 0
+        }
+    
+    def _load_proxies(self) -> List[str]:
+        """Load proxy list from environment or config"""
+        proxies = os.getenv('PROXY_LIST', '').split(',')
+        return [p.strip() for p in proxies if p.strip()]
+    
+    @circuit(failure_threshold=5, recovery_timeout=60, expected_exception=Exception)
+    def _get_circuit_breaker(self, domain: str):
+        """Get or create circuit breaker for domain"""
+        if domain not in self.circuit_breakers:
+            self.circuit_breakers[domain] = circuit(
+                failure_threshold=3,
+                recovery_timeout=300,  # 5 minutes
+                expected_exception=Exception
+            )
+        return self.circuit_breakers[domain]
+    
+    async def crawl_company(self, company_id: str, keywords: Optional[List[str]] = None) -> Dict:
+        """
+        Main entry point for crawling a company's jobs
+        Returns metrics about the crawl
+        """
+        with get_session() as session:
+            # Get company details
+            company = session.query(models.Company).filter_by(id=company_id).first()
+            if not company:
+                raise ValueError(f"Company {company_id} not found")
+            
+            logger.info(f"Starting crawl for {company.name} with strategy {self.strategy}")
+            
+            all_jobs = []
+            
+            # Step 1: Try API sources first if strategy allows
+            if self.strategy in [ScraperStrategy.API_PRIMARY, ScraperStrategy.HYBRID]:
+                api_jobs = await self._fetch_from_apis(company.name, keywords)
+                all_jobs.extend(api_jobs)
+                logger.info(f"Fetched {len(api_jobs)} jobs from APIs")
+            
+            # Step 2: Try direct scraping if needed
+            if self.strategy in [ScraperStrategy.SCRAPE_ONLY, ScraperStrategy.HYBRID]:
+                if self.strategy == ScraperStrategy.HYBRID and len(all_jobs) >= 20:
+                    logger.info("Sufficient jobs from APIs, skipping scraping")
+                else:
+                    scrape_jobs = await self._scrape_company_site(company, keywords)
+                    all_jobs.extend(scrape_jobs)
+                    logger.info(f"Scraped {len(scrape_jobs)} additional jobs")
+            
+            # Step 3: Process and deduplicate jobs
+            processed_count = self._process_jobs(session, company_id, all_jobs)
+            
+            # Step 4: Log metrics
+            metrics = {
+                'company': company.name,
+                'total_found': len(all_jobs),
+                'processed': processed_count,
+                **self.session_metrics
+            }
+            
+            logger.info(f"Crawl complete for {company.name}: {metrics}")
+            return metrics
+    
+    async def _fetch_from_apis(self, company_name: str, keywords: Optional[List[str]]) -> List[JobData]:
+        """Fetch jobs from all configured APIs"""
+        all_jobs = []
+        
+        # Build search query
+        query = f'"{company_name}"'
+        if keywords:
+            query += f" {' '.join(keywords[:3])}"  # Limit keywords
+        
+        # Try each API source
+        for fetcher in [
+            self.api_aggregator.fetch_indeed_jobs,
+            self.api_aggregator.fetch_adzuna_jobs
+        ]:
+            try:
+                jobs = fetcher(query)
+                # Filter to ensure they're actually from this company
+                company_jobs = [
+                    job for job in jobs 
+                    if company_name.lower() in job.company.lower()
+                ]
+                all_jobs.extend(company_jobs)
+                self.session_metrics['api_success'] += len(company_jobs)
+            except Exception as e:
+                logger.error(f"API fetch failed: {e}")
+                self.session_metrics['api_failed'] += 1
+        
+        return all_jobs
+    
+    async def _scrape_company_site(self, company: models.Company, 
+                                   keywords: Optional[List[str]]) -> List[JobData]:
+        """Scrape jobs directly from company site"""
+        if not company.careers_url:
+            logger.warning(f"No careers URL for {company.name}")
+            return []
+        
+        domain = urlparse(company.careers_url).netloc
+        
+        # Check circuit breaker
+        breaker = self._get_circuit_breaker(domain)
+        if breaker.current_state == 'open':
+            logger.warning(f"Circuit breaker open for {domain}, skipping")
+            return []
+        
+        try:
+            # Import the appropriate scraper based on detected ATS
+            scraper = self._get_scraper_for_company(company)
+            if not scraper:
+                logger.warning(f"No scraper available for {company.name}")
+                return []
+            
+            # Execute scraping with all protections
+            jobs = await self._execute_safe_scrape(scraper, company, keywords)
+            self.session_metrics['scrape_success'] += len(jobs)
+            return jobs
+            
+        except Exception as e:
+            logger.error(f"Scraping failed for {company.name}: {e}")
+            self.session_metrics['scrape_failed'] += 1
+            breaker.record_failure()
+            return []
+    
+    def _get_scraper_for_company(self, company: models.Company):
+        """Get appropriate scraper based on company configuration"""
+        # Check if we have a specific scraper configured
+        if company.scraper_config:
+            config = json.loads(company.scraper_config)
+            scraper_type = config.get('type', 'auto')
+        else:
+            scraper_type = 'auto'
+        
+        # Auto-detect based on careers URL
+        if scraper_type == 'auto':
+            careers_url = company.careers_url.lower()
+            if 'greenhouse' in careers_url:
+                from libs.scraper.ats_scrapers import GreenhouseScraper
+                return GreenhouseScraper(self.proxy_pool)
+            elif 'lever' in careers_url:
+                from libs.scraper.ats_scrapers import LeverScraper
+                return LeverScraper(self.proxy_pool)
+            elif 'workday' in careers_url:
+                from libs.scraper.ats_scrapers import WorkdayScraper
+                return WorkdayScraper(self.proxy_pool)
+            elif 'anduril' in careers_url:
+                from libs.scraper.anduril_adapter import AndurilScraper
+                return AndurilScraper(self.proxy_pool)
+        
+        return None
+    
+    async def _execute_safe_scrape(self, scraper, company: models.Company,
+                                   keywords: Optional[List[str]]) -> List[JobData]:
+        """Execute scraping with all safety measures"""
+        jobs = []
+        
+        # Configure scraper for stealth mode
+        scraper.headless_mode = self._should_use_headless(company.careers_url)
+        
+        # Add human-like delays
+        await self._human_delay()
+        
+        # Execute scraping
+        raw_jobs = scraper.search(keywords)
+        
+        # Convert to JobData format
+        for job in raw_jobs:
+            jobs.append(JobData(
+                url=job.url,
+                title=job.title,
+                company=company.name,
+                location=job.location,
+                description=job.description,
+                source=self._detect_source(company.careers_url),
+                posted_date=job.scraped_at,
+                department=getattr(job, 'department', None),
+                job_type=getattr(job, 'job_type', None),
+                seniority=getattr(job, 'seniority', None)
+            ))
+        
+        return jobs
+    
+    def _should_use_headless(self, url: str) -> bool:
+        """Determine if headless mode is safe for this site"""
+        # These sites heavily detect headless mode
+        tough_sites = [
+            'linkedin.com',
+            'indeed.com', 
+            'glassdoor.com',
+            'angel.co',
+            'wellfound.com'
+        ]
+        
+        domain = urlparse(url).netloc.lower()
+        return not any(site in domain for site in tough_sites)
+    
+    async def _human_delay(self):
+        """Add human-like delay between actions"""
+        delay = self.behavior_sim.sleep_interval(base_duration=2.0)
+        await asyncio.sleep(delay)
+    
+    def _detect_source(self, careers_url: str) -> JobSource:
+        """Detect job source from URL"""
+        url_lower = careers_url.lower()
+        
+        if 'greenhouse' in url_lower:
+            return JobSource.GREENHOUSE
+        elif 'lever' in url_lower:
+            return JobSource.LEVER
+        elif 'workday' in url_lower:
+            return JobSource.WORKDAY
+        else:
+            return JobSource.COMPANY_SITE
+    
+    def _process_jobs(self, session, company_id: str, jobs: List[JobData]) -> int:
+        """
+        Process jobs with deduplication and change detection
+        Returns number of jobs processed
+        """
+        processed = 0
+        
+        for job in jobs:
+            try:
+                # Check for existing job by URL (primary deduplication)
+                existing = session.query(models.Job).filter_by(url=job.url).first()
+                
+                if existing:
+                    # Check if content changed
+                    new_fingerprint = job.generate_fingerprint()
+                    if existing.content_fingerprint != new_fingerprint:
+                        # Update job with new content
+                        self._update_job(session, existing, job)
+                        self.session_metrics['jobs_updated'] += 1
+                        processed += 1
+                    else:
+                        # Skip duplicate
+                        self.session_metrics['duplicates_skipped'] += 1
+                        logger.debug(f"Skipping duplicate job: {job.title}")
+                else:
+                    # Create new job
+                    self._create_job(session, company_id, job)
+                    self.session_metrics['jobs_created'] += 1
+                    processed += 1
+                    
+            except Exception as e:
+                logger.error(f"Error processing job {job.url}: {e}")
+                continue
+        
+        session.commit()
+        return processed
+    
+    def _create_job(self, session, company_id: str, job: JobData):
+        """Create new job in database"""
+        db_job = models.Job(**job.to_db_dict(company_id))
+        session.add(db_job)
+        logger.info(f"Created new job: {job.title} at {job.company}")
+    
+    def _update_job(self, session, existing: models.Job, job: JobData):
+        """Update existing job with new content"""
+        # Update fields that might have changed
+        existing.title = job.title
+        existing.location = job.location
+        existing.jd_fulltext = job.description
+        existing.salary_range = job.salary_range
+        existing.content_fingerprint = job.generate_fingerprint()
+        existing.last_updated = datetime.utcnow()
+        
+        logger.info(f"Updated job: {job.title} (content changed)")
+
+
+# Usage example
+async def main():
+    """Example usage of the enhanced crawler"""
+    import asyncio
+    import os
+    
+    # Configure environment
+    os.environ['INDEED_PUBLISHER_ID'] = 'your_indeed_key'
+    os.environ['ADZUNA_APP_ID'] = 'your_adzuna_app'
+    os.environ['ADZUNA_API_KEY'] = 'your_adzuna_key'
+    os.environ['PROXY_LIST'] = 'proxy1.example.com:8080,proxy2.example.com:8080'
+    
+    # Initialize crawler with hybrid strategy
+    crawler = SmartCrawlWorker(strategy=ScraperStrategy.HYBRID)
+    
+    # Crawl a company
+    metrics = await crawler.crawl_company(
+        company_id='some-uuid',
+        keywords=['python', 'senior', 'backend']
+    )
+    
+    print(f"Crawl metrics: {json.dumps(metrics, indent=2)}")
+
+
+if __name__ == "__main__":
+    import asyncio
+    import os
+    asyncio.run(main())
+#next file 
+"""
+Production-Ready ATS Scraper Base Class
+Fixes: Headless detection, proper retries, smart browser management
+"""
+from __future__ import annotations
+import os
+import time
+import random
+import logging
+from typing import List, Dict, Any, Optional, Tuple
+from dataclasses import dataclass
+from datetime import datetime
+from abc import ABC, abstractmethod
+from contextlib import contextmanager
+
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.firefox.options import Options as FirefoxOptions
+from selenium.webdriver.chrome.options import Options as ChromeOptions
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
+from selenium.webdriver.common.action_chains import ActionChains
+from undetected_chromedriver import Chrome as UndetectedChrome
+import undetected_chromedriver as uc
+
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ScraperConfig:
+    """Configuration for scraper behavior"""
+    use_headless: bool = False  # Default to headed for better success
+    use_undetected: bool = True  # Use undetected-chromedriver
+    use_playwright: bool = False  # Fallback to Playwright
+    max_pages: int = 10
+    page_delay_range: Tuple[float, float] = (2.0, 5.0)
+    scroll_behavior: bool = True
+    mouse_movement: bool = True
+    random_clicks: bool = True
+    viewport_size: Optional[Tuple[int, int]] = None
+    proxy: Optional[str] = None
+    user_data_dir: Optional[str] = None  # Reuse browser profile
+    
+
+class BrowserManager:
+    """Manages browser instances with anti-detection measures"""
+    
+    def __init__(self, config: ScraperConfig):
+        self.config = config
+        self.driver = None
+        self.playwright = None
+        self.browser = None
+        
+    @contextmanager
+    def get_driver(self):
+        """Context manager for browser lifecycle"""
+        try:
+            if self.config.use_playwright:
+                yield self._setup_playwright()
+            elif self.config.use_undetected:
+                yield self._setup_undetected_chrome()
+            else:
+                yield self._setup_standard_chrome()
+        finally:
+            self._cleanup()
+    
+    def _setup_undetected_chrome(self) -> webdriver.Chrome:
+        """Setup undetected-chromedriver (best for tough sites)"""
+        options = uc.ChromeOptions()
+        
+        # Only use headless if explicitly safe
+        if self.config.use_headless:
+            options.add_argument('--headless=new')  # Use new headless mode
+        
+        # Anti-detection arguments
+        options.add_argument('--disable-blink-features=AutomationControlled')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-web-security')
+        options.add_argument('--disable-features=VizDisplayCompositor')
+        
+        # Random viewport
+        if self.config.viewport_size:
+            width, height = self.config.viewport_size
+        else:
+            width = random.randint(1200, 1920)
+            height = random.randint(900, 1080)
+        options.add_argument(f'--window-size={width},{height}')
+        
+        # User agent rotation
+        user_agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        ]
+        options.add_argument(f'--user-agent={random.choice(user_agents)}')
+        
+        # Proxy support
+        if self.config.proxy:
+            options.add_argument(f'--proxy-server={self.config.proxy}')
+        
+        # Profile persistence (maintains cookies/session)
+        if self.config.user_data_dir:
+            options.add_argument(f'--user-data-dir={self.config.user_data_dir}')
+        else:
+            # Use temp profile
+            import tempfile
+            temp_dir = tempfile.mkdtemp(prefix='chrome_profile_')
+            options.add_argument(f'--user-data-dir={temp_dir}')
+        
+        # Create driver with version management
+        driver = uc.Chrome(options=options, version_main=120)
+        
+        # Additional stealth JavaScript
+        self._inject_stealth_js(driver)
+        
+        self.driver = driver
+        return driver
+    
+    def _setup_standard_chrome(self) -> webdriver.Chrome:
+        """Fallback to standard Chrome with protections"""
+        options = ChromeOptions()
+        
+        # Never use headless for standard Chrome on tough sites
+        if self.config.use_headless:
+            logger.warning("Headless mode not recommended for standard Chrome")
+        
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option('useAutomationExtension', False)
+        options.add_argument('--disable-blink-features=AutomationControlled')
+        
+        driver = webdriver.Chrome(options=options)
+        self._inject_stealth_js(driver)
+        
+        self.driver = driver
+        return driver
+    
+    async def _setup_playwright(self):
+        """Setup Playwright browser (async fallback option)"""
+        self.playwright = await async_playwright().start()
+        
+        # Use Chromium with stealth
+        self.browser = await self.playwright.chromium.launch(
+            headless=self.config.use_headless,
+            args=[
+                '--disable-blink-features=AutomationControlled',
+                '--disable-features=site-per-process'
+            ]
+        )
+        
+        context = await self.browser.new_context(
+            viewport={'width': 1920, 'height': 1080},
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        )
+        
+        page = await context.new_page()
+        
+        # Inject stealth scripts
+        await page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+        """)
+        
+        return page
+    
+    def _inject_stealth_js(self, driver):
+        """Inject JavaScript to avoid detection"""
+        stealth_js = """
+        // Remove webdriver property
+        Object.defineProperty(navigator, 'webdriver', {
+            get: () => undefined
+        });
+        
+        // Override permissions
+        const originalQuery = window.navigator.permissions.query;
+        window.navigator.permissions.query = (parameters) => (
+            parameters.name === 'notifications' ?
+                Promise.resolve({ state: Notification.permission }) :
+                originalQuery(parameters)
+        );
+        
+        // Fix Chrome runtime
+        Object.defineProperty(navigator, 'plugins', {
+            get: () => [1, 2, 3, 4, 5]
+        });
+        
+        // Fix languages
+        Object.defineProperty(navigator, 'languages', {
+            get: () => ['en-US', 'en']
+        });
+        
+        // Override canvas fingerprint
+        const originalGetContext = HTMLCanvasElement.prototype.getContext;
+        HTMLCanvasElement.prototype.getContext = function(type, ...args) {
+            if (type === '2d') {
+                const context = originalGetContext.call(this, type, ...args);
+                const originalFillText = context.fillText;
+                context.fillText = function(...args) {
+                    args[0] = args[0] + String.fromCharCode(0);
+                    return originalFillText.call(this, ...args);
+                };
+                return context;
+            }
+            return originalGetContext.call(this, type, ...args);
+        };
+        """
+        
+        driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
+            'source': stealth_js
+        })
+    
+    def _cleanup(self):
+        """Clean up browser resources"""
+        try:
+            if self.driver:
+                self.driver.quit()
+            if self.browser:
+                self.browser.close()
+            if self.playwright:
+                self.playwright.stop()
+        except Exception as e:
+            logger.warning(f"Cleanup error: {e}")
+
+
+class HumanLikeBehavior:
+    """Simulate human-like interaction patterns"""
+    
+    @staticmethod
+    def random_sleep(min_seconds: float = 0.5, max_seconds: float = 2.0):
+        """Human-like random delay"""
+        time.sleep(random.uniform(min_seconds, max_seconds))
+    
+    @staticmethod
+    def smooth_scroll(driver, pixels: int = None):
+        """Smooth scrolling with variable speed"""
+        if pixels is None:
+            pixels = random.randint(300, 700)
+        
+        # Scroll in small increments
+        increments = random.randint(3, 7)
+        for i in range(increments):
+            scroll_amount = pixels // increments
+            driver.execute_script(f"window.scrollBy(0, {scroll_amount});")
+            time.sleep(random.uniform(0.1, 0.3))
+    
+    @staticmethod
+    def human_mouse_movement(driver, element=None):
+        """Simulate human-like mouse movement with Bezier curves"""
+        action = ActionChains(driver)
+        
+        # Get current position (approximate)
+        if element:
+            # Move to element with curve
+            offset_x = random.randint(-5, 5)
+            offset_y = random.randint(-5, 5)
+            
+            # Create intermediate points for Bezier-like movement
+            steps = random.randint(2, 4)
+            for i in range(steps):
+                intermediate_x = random.randint(-20, 20)
+                intermediate_y = random.randint(-20, 20)
+                action.move_by_offset(intermediate_x, intermediate_y)
+                action.pause(random.uniform(0.01, 0.05))
+            
+            action.move_to_element_with_offset(element, offset_x, offset_y)
+        else:
+            # Random movement
+            for _ in range(random.randint(1, 3)):
+                x = random.randint(-100, 100)
+                y = random.randint(-100, 100)
+                action.move_by_offset(x, y)
+                action.pause(random.uniform(0.1, 0.3))
+        
+        action.perform()
+    
+    @staticmethod
+    def random_interactions(driver):
+        """Perform random human-like interactions"""
+        interactions = [
+            lambda: HumanLikeBehavior.smooth_scroll(driver),
+            lambda: HumanLikeBehavior.human_mouse_movement(driver),
+            lambda: time.sleep(random.uniform(0.5, 1.5)),
+            lambda: driver.execute_script("window.scrollTo(0, 0);"),  # Scroll to top
+        ]
+        
+        # Perform 1-3 random interactions
+        for _ in range(random.randint(1, 3)):
+            random.choice(interactions)()
+            time.sleep(random.uniform(0.2, 0.5))
+
+
+class EnhancedATSScraper(ABC):
+    """Enhanced base class for all ATS scrapers"""
+    
+    def __init__(self, config: Optional[ScraperConfig] = None):
+        self.config = config or ScraperConfig()
+        self.browser_manager = BrowserManager(self.config)
+        self.behavior = HumanLikeBehavior()
+        self.retry_count = 0
+        self.last_request_time = None
+        
+    @abstractmethod
+    def get_job_listing_selectors(self) -> Dict[str, str]:
+        """Return CSS selectors for job listings"""
+        pass
+    
+    @abstractmethod
+    def parse_job_details(self, element) -> Dict[str, Any]:
+        """Parse job details from element"""
+        pass
+    
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=4, max=60),
+        retry=retry_if_exception_type(WebDriverException)
+    )
+    def scrape_jobs(self, url: str, max_jobs: int = 50) -> List[Dict]:
+        """Main scraping method with all protections"""
+        jobs = []
+        
+        with self.browser_manager.get_driver() as driver:
+            try:
+                # Navigate with retry protection
+                self._safe_navigate(driver, url)
+                
+                # Initial human behavior
+                self.behavior.random_interactions(driver)
+                
+                # Scrape with pagination
+                page_num = 0
+                while page_num < self.config.max_pages and len(jobs) < max_jobs:
+                    # Rate limiting
+                    self._enforce_rate_limit()
+                    
+                    # Extract jobs from current page
+                    page_jobs = self._extract_jobs_from_page(driver)
+                    jobs.extend(page_jobs)
+                    
+                    logger.info(f"Extracted {len(page_jobs)} jobs from page {page_num + 1}")
+                    
+                    # Try to go to next page
+                    if not self._go_to_next_page(driver):
+                        break
+                    
+                    page_num += 1
+                    
+                    # Human-like delay between pages
+                    delay = random.uniform(*self.config.page_delay_range)
+                    time.sleep(delay)
+                    
+                    # Random interactions
+                    if self.config.scroll_behavior and random.random() > 0.3:
+                        self.behavior.random_interactions(driver)
+                
+            except Exception as e:
+                logger.error(f"Scraping failed: {e}")
+                self._handle_failure(driver, e)
+                raise
+        
+        return jobs[:max_jobs]
+    
+    def _safe_navigate(self, driver, url: str):
+        """Navigate to URL with error handling"""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                driver.get(url)
+                
+                # Wait for page load
+                WebDriverWait(driver, 20).until(
+                    EC.presence_of_element_located((By.TAG_NAME, "body"))
+                )
+                
+                # Check for common block indicators
+                if self._is_blocked(driver):
+                    raise Exception("Detected blocking mechanism")
+                
+                return
+                
+            except TimeoutException:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Navigation timeout, retry {attempt + 1}")
+                    time.sleep(5 * (attempt + 1))
+                else:
+                    raise
+    
+    def _is_blocked(self, driver) -> bool:
+        """Check for common blocking indicators"""
+        indicators = [
+            "Access Denied",
+            "Blocked",
+            "403 Forbidden", 
+            "captcha",
+            "challenge",
+            "cf-browser-verification",
+            "Are you a robot"
+        ]
+        
+        page_source = driver.page_source.lower()
+        return any(ind.lower() in page_source for ind in indicators)
+    
+    def _enforce_rate_limit(self):
+        """Enforce rate limiting between requests"""
+        if self.last_request_time:
+            elapsed = time.time() - self.last_request_time
+            min_delay = 60.0 / 30  # Max 30 requests per minute
+            if elapsed < min_delay:
+                time.sleep(min_delay - elapsed)
+        
+        self.last_request_time = time.time()
+    
+    def _extract_jobs_from_page(self, driver) -> List[Dict]:
+        """Extract all jobs from current page"""
+        jobs = []
+        selectors = self.get_job_listing_selectors()
+        
+        try:
+            # Wait for job containers
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located(
+                    (By.CSS_SELECTOR, selectors['job_container'])
+                )
+            )
+            
+            job_elements = driver.find_elements(
+                By.CSS_SELECTOR, selectors['job_container']
+            )
+            
+            for element in job_elements:
+                try:
+                    # Scroll element into view
+                    driver.execute_script(
+                        "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", 
+                        element
+                    )
+                    time.sleep(random.uniform(0.1, 0.3))
+                    
+                    # Extract job data
+                    job_data = self.parse_job_details(element)
+                    if job_data:
+                        jobs.append(job_data)
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to extract job: {e}")
+                    continue
+                    
+        except TimeoutException:
+            logger.warning("No jobs found on page")
+            
+        return jobs
+    
+    def _go_to_next_page(self, driver) -> bool:
+        """Navigate to next page if available"""
+        next_selectors = [
+            'a[aria-label="Next"]',
+            'button[aria-label="Next"]',
+            '.next-page',
+            'a:contains("Next")',
+            'button:contains("Next")'
+        ]
+        
+        for selector in next_selectors:
+            try:
+                next_btn = driver.find_element(By.CSS_SELECTOR, selector)
+                if next_btn and next_btn.is_enabled():
+                    # Human-like click
+                    self.behavior.human_mouse_movement(driver, next_btn)
+                    time.sleep(random.uniform(0.1, 0.3))
+                    next_btn.click()
+                    
+                    # Wait for page to update
+                    time.sleep(random.uniform(2, 4))
+                    return True
+                    
+            except NoSuchElementException:
+                continue
+                
+        return False
+    
+    def _handle_failure(self, driver, exception: Exception):
+        """Handle scraping failures"""
+        # Take screenshot for debugging
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        screenshot_path = f"failures/screenshot_{timestamp}.png"
+        
+        try:
+            os.makedirs('failures', exist_ok=True)
+            driver.save_screenshot(screenshot_path)
+            
+            # Save page source
+            with open(f"failures/page_{timestamp}.html", 'w') as f:
+                f.write(driver.page_source)
+                
+            logger.info(f"Failure artifacts saved to {screenshot_path}")
+            
+        except Exception as e:
+            logger.warning(f"Could not save failure artifacts: {e}")
+
+
+# Example implementation for Greenhouse
+class ProductionGreenhouseScraper(EnhancedATSScraper):
+    """Production-ready Greenhouse scraper"""
+    
+    def get_job_listing_selectors(self) -> Dict[str, str]:
+        return {
+            'job_container': '.opening',
+            'title': 'a',
+            'location': '.location', 
+            'department': '.department',
+            'link': 'a'
+        }
+    
+    def parse_job_details(self, element) -> Dict[str, Any]:
+        """Parse Greenhouse job listing"""
+        try:
+            selectors = self.get_job_listing_selectors()
+            
+            title_elem = element.find_element(By.CSS_SELECTOR, selectors['title'])
+            title = title_elem.text.strip()
+            url = title_elem.get_attribute('href')
+            
+            location = self._safe_get_text(element, selectors['location'])
+            department = self._safe_get_text(element, selectors['department'])
+            
+            return {
+                'title': title,
+                'url': url,
+                'location': location,
+                'department': department,
+                'source': 'greenhouse',
+                'scraped_at': datetime.utcnow()
+            }
+            
+        except Exception as e:
+            logger.warning(f"Failed to parse job: {e}")
+            return None
+    
+    def _safe_get_text(self, element, selector: str) -> str:
+        """Safely extract text from element"""
+        try:
+            elem = element.find_element(By.CSS_SELECTOR, selector)
+            return elem.text.strip()
+        except:
+            return ""
+
+
+# Usage example
+def main():
+    """Example usage"""
+    # Configure for maximum stealth
+    config = ScraperConfig(
+        use_headless=False,  # Never use headless for tough sites
+        use_undetected=True,  # Use undetected-chromedriver
+        max_pages=5,
+        scroll_behavior=True,
+        mouse_movement=True,
+        random_clicks=True
+    )
+    
+    scraper = ProductionGreenhouseScraper(config)
+    
+    # Scrape jobs
+    jobs = scraper.scrape_jobs(
+        url='https://boards.greenhouse.io/databricks',
+        max_jobs=30
+    )
+    
+    print(f"Scraped {len(jobs)} jobs")
+    for job in jobs[:5]:
+        print(f"- {job['title']} in {job['location']}")
+
+
+if __name__ == "__main__":
+    main()

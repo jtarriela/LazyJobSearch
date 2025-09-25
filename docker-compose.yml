@@ -1,109 +1,234 @@
+# docker-compose.yml - LazyJobSearch Production Stack
 version: '3.8'
 
 services:
-  # PostgreSQL with pgvector extension
+  # PostgreSQL with pgvector
   postgres:
     image: pgvector/pgvector:pg16
+    container_name: ljs-postgres
     environment:
-      POSTGRES_DB: lazyjobsearch
-      POSTGRES_USER: ljs_user
-      POSTGRES_PASSWORD: ljs_password
-    ports:
-      - "5432:5432"
+      POSTGRES_USER: ${POSTGRES_USER:-lazyjob}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-lazyjobsearch}
+      POSTGRES_EXTENSIONS: 'pgvector,pg_trgm,btree_gin'
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+      - ./migrations/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ljs_user -d lazyjobsearch"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lazyjob}"]
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
-  # Redis for caching and job queues
+  # Redis for caching and queues
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    container_name: ljs-redis
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
     volumes:
       - redis_data:/data
+    ports:
+      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
-      retries: 3
+      retries: 5
+    restart: unless-stopped
 
-  # MinIO for object storage (artifacts, resumes, etc.)
+  # MinIO for object storage (S3 compatible)
   minio:
     image: minio/minio:latest
+    container_name: ljs-minio
+    command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin123
-    ports:
-      - "9000:9000"
-      - "9001:9001"
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     volumes:
       - minio_data:/data
-    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"  # API
+      - "9001:9001"  # Console
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 30s
       timeout: 20s
       retries: 3
+    restart: unless-stopped
 
+  # Selenium Grid Hub (for distributed scraping)
+  selenium-hub:
+    image: selenium/hub:latest
+    container_name: ljs-selenium-hub
+    ports:
+      - "4442:4442"
+      - "4443:4443"
+      - "4444:4444"
+    environment:
+      SE_SESSION_REQUEST_TIMEOUT: 300
+      SE_SESSION_RETRY_INTERVAL: 5
+      SE_NODE_MAX_SESSIONS: 5
+    restart: unless-stopped
+
+  # Chrome node for Selenium
+  selenium-chrome:
+    image: selenium/node-chrome:latest
+    container_name: ljs-selenium-chrome
+    shm_size: 2gb
+    depends_on:
+      - selenium-hub
+    environment:
+      SE_EVENT_BUS_HOST: selenium-hub
+      SE_EVENT_BUS_PUBLISH_PORT: 4442
+      SE_EVENT_BUS_SUBSCRIBE_PORT: 4443
+      SE_NODE_MAX_SESSIONS: 3
+      SE_NODE_SESSION_TIMEOUT: 300
+      SE_OPTS: "--log-level WARNING"
+    volumes:
+      - /dev/shm:/dev/shm
+    restart: unless-stopped
+    deploy:
+      replicas: 2  # Run 2 Chrome instances
+
+  # Firefox node for Selenium (backup)
+  selenium-firefox:
+    image: selenium/node-firefox:latest
+    container_name: ljs-selenium-firefox
+    shm_size: 2gb
+    depends_on:
+      - selenium-hub
+    environment:
+      SE_EVENT_BUS_HOST: selenium-hub
+      SE_EVENT_BUS_PUBLISH_PORT: 4442
+      SE_EVENT_BUS_SUBSCRIBE_PORT: 4443
+      SE_NODE_MAX_SESSIONS: 2
+    volumes:
+      - /dev/shm:/dev/shm
+    restart: unless-stopped
+
+  # Main application
   app:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ljs-app
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      minio:
-        condition: service_healthy
     environment:
-      DATABASE_URL: "postgresql://ljs_user:ljs_password@postgres:5432/lazyjobsearch"
-      REDIS_URL: "redis://redis:6379/0"
-      MINIO_ENDPOINT: "minio:9000"
-      MINIO_ROOT_USER: "minioadmin"
-      MINIO_ROOT_PASSWORD: "minioadmin123"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-lazyjob}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-lazyjobsearch}
+      REDIS_URL: redis://redis:6379/0
+      SELENIUM_HUB_URL: http://selenium-hub:4444
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      PYTHONUNBUFFERED: 1
     volumes:
-      - .:/app
-    working_dir: /app
-    command: ["bash", "-c", "echo 'App container started'; tail -f /dev/null"]
+      - ./:/app
+      - ./logs:/app/logs
+      - ./data:/app/data
+    command: python -m cli.ljs monitor --follow
+    restart: unless-stopped
 
-  # LazyJobSearch API (when implemented)
-  # api:
-  #   build: .
-  #   environment:
-  #     DATABASE_URL: "postgresql://ljs_user:ljs_password@postgres:5432/lazyjobsearch"
-  #     REDIS_URL: "redis://redis:6379/0"
-  #     MINIO_ENDPOINT: "minio:9000"
-  #   ports:
-  #     - "8000:8000"
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #     redis:
-  #       condition: service_healthy
-  #   volumes:
-  #     - .:/app
+  # Celery worker for background jobs
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ljs-celery-worker
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-lazyjob}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-lazyjobsearch}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      C_FORCE_ROOT: 1
+    volumes:
+      - ./:/app
+      - ./logs:/app/logs
+    command: celery -A libs.tasks.celery_app worker --loglevel=info --concurrency=4
+    restart: unless-stopped
+    deploy:
+      replicas: 2
 
-  # Background worker (when implemented)
-  # worker:
-  #   build: .
-  #   command: ["python", "-m", "celery", "worker", "-A", "libs.worker", "--loglevel=info"]
-  #   environment:
-  #     DATABASE_URL: "postgresql://ljs_user:ljs_password@postgres:5432/lazyjobsearch"
-  #     REDIS_URL: "redis://redis:6379/0"
-  #     MINIO_ENDPOINT: "minio:9000"
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #     redis:
-  #       condition: service_healthy
-  #   volumes:
-  #     - .:/app
+  # Celery beat for scheduled tasks
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ljs-celery-beat
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-lazyjob}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-lazyjobsearch}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+    volumes:
+      - ./:/app
+    command: celery -A libs.tasks.celery_app beat --loglevel=info
+    restart: unless-stopped
+
+  # Flower for Celery monitoring
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ljs-flower
+    depends_on:
+      - redis
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    ports:
+      - "5555:5555"
+    command: celery -A libs.tasks.celery_app flower --port=5555
+    restart: unless-stopped
+
+  # Grafana for monitoring (optional)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: ljs-grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_INSTALL_PLUGINS: redis-datasource
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ljs-prometheus
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
 
 volumes:
   postgres_data:
   redis_data:
   minio_data:
+  grafana_data:
+  prometheus_data:
+
+networks:
+  default:
+    name: ljs-network
+    driver: bridge

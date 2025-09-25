@@ -1,42 +1,92 @@
-FROM python:3.11-slim
+# Dockerfile - LazyJobSearch Production Container
+FROM python:3.11-slim-bookworm
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    DEBIAN_FRONTEND=noninteractive
 
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Build essentials
+    build-essential \
+    gcc \
+    g++ \
+    # PostgreSQL client
+    postgresql-client \
+    libpq-dev \
+    # Chrome dependencies for Selenium
+    wget \
+    gnupg \
+    unzip \
+    curl \
+    # Image processing
+    libmagic1 \
+    # PDF processing
+    poppler-utils \
+    # Common utilities
+    git \
+    vim \
+    htop \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Chrome for Selenium (if running locally)
+RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
+    && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list \
+    && apt-get update \
+    && apt-get install -y google-chrome-stable \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install ChromeDriver
+RUN CHROMEDRIVER_VERSION=$(curl -sS chromedriver.storage.googleapis.com/LATEST_RELEASE) \
+    && wget -q "https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip" \
+    && unzip chromedriver_linux64.zip \
+    && mv chromedriver /usr/local/bin/ \
+    && chmod +x /usr/local/bin/chromedriver \
+    && rm chromedriver_linux64.zip
+
+# Create app directory
 WORKDIR /app
 
-# Install Firefox ESR and all necessary system dependencies for it to run headlessly
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libpq-dev \
-    curl \
-    firefox-esr \
-    # Add all required libraries for headless Firefox
-    libgtk-3-0 \
-    libasound2 \
-    libdbus-glib-1-2 \
-    xvfb \
-    libxtst6 \
-    libxt6 \
-    libxrandr2 \
-    libnss3 \
-    libnspr4 \
-  && rm -rf /var/lib/apt/lists/*
+# Create necessary directories
+RUN mkdir -p \
+    /app/logs \
+    /app/data \
+    /app/debug/scraper_failures \
+    /app/cache \
+    && chmod -R 755 /app
 
-# Copy minimal files first for dependency layer caching
-COPY pyproject.toml README.md ./
-RUN pip install --upgrade pip && pip install .[dev]
+# Copy requirements first (for better caching)
+COPY requirements.txt .
 
-# Copy the rest of the source
+# Install Python dependencies
+RUN pip install --upgrade pip setuptools wheel \
+    && pip install -r requirements.txt
+
+# Install additional tools
+RUN pip install \
+    supervisor \
+    gunicorn \
+    ipython
+
+# Copy application code
 COPY . .
 
-# Default environment variables (can be overridden by compose)
-ENV DATABASE_URL=postgresql://ljs_user:ljs_password@postgres:5432/lazyjobsearch \
-    REDIS_URL=redis://redis:6379/0 \
-    MINIO_ENDPOINT=minio:9000 \
-    MINIO_ROOT_USER=minioadmin \
-    MINIO_ROOT_PASSWORD=minioadmin123
+# Create non-root user
+RUN useradd -m -s /bin/bash ljs \
+    && chown -R ljs:ljs /app
 
-# Idle by default; use `docker compose exec app bash` or override command
-CMD ["bash", "-c", "echo 'App container ready'; tail -f /dev/null"]
+# Switch to non-root user
+USER ljs
+
+# Set Python path
+ENV PYTHONPATH=/app:$PYTHONPATH
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import sys; sys.exit(0)"
+
+# Default command (can be overridden)
+CMD ["python", "-m", "cli.ljs", "--help"]
